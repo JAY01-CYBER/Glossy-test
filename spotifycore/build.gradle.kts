@@ -1,23 +1,21 @@
-
 plugins {
+    // Gradle TOML alias error को बाईपास करने के लिए डायरेक्ट kotlin("jvm") लगा दिया है
+    kotlin("jvm")
     alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.kotlin.jvm) // Pure Kotlin JVM module[span_1](start_span)[span_1](end_span)
 }
 
-kotlin {
-    jvmToolchain(21)
-    sourceSets {
-        main {
-            kotlin.srcDir("src")
-        }
-    }
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
 
 dependencies {
+    // Spotify API (Ktor, Coroutines, Serialization) के लिए ज़रूरी डिपेंडेंसीज़ 
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.serialization.json)
+    
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.content.negotiation)
-    implementation(libs.ktor.serialization.json)
-    implementation(libs.ktor.client.encoding)
-    testImplementation(libs.junit)
+    implementation(libs.ktor.serialization.kotlinx.json)
 }
