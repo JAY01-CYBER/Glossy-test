@@ -76,10 +76,8 @@ fun SpotifyLoginScreen(navController: NavController) {
     LaunchedEffect(Unit) {
         cookie = SpotifySession.cookie(context).takeIf(String::isNotBlank)
         checkingCookie = false
-        // Not logged in? Start the page load now so it's ready by the time
-        // the WebView below composes (and warm even earlier from the parent
-        // screen — see IntegrationScreen).
-        if (cookie == null) SpotifyLoginPrewarm.warm(context)
+        // Prewarming disabled to fix the black screen issue in Jetpack Compose
+        // if (cookie == null) SpotifyLoginPrewarm.warm(context)
     }
 
     Column(
