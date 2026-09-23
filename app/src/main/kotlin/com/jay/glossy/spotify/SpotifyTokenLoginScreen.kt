@@ -162,11 +162,13 @@ fun SpotifyTokenLoginScreen(navController: NavController) {
                     isImporting = true
                     message = null
                     scope.launch {
+                        // Extract playlist ID properly for the new importer
+                        val playlistId = Regex("playlist[/:]([A-Za-z0-9]+)").find(playlistUrl)?.groupValues?.get(1) ?: ""
                         message = runCatching {
+                            if (playlistId.isBlank()) error("Enter a valid Spotify playlist URL")
                             SpotifyPlaylistImporter.importPlaylist(
-                                context = context,
                                 database = database,
-                                playlistUrl = playlistUrl,
+                                playlistId = playlistId,
                                 playlistName = playlistName.ifBlank { "Spotify playlist" },
                             )
                         }.fold({ "Imported $it songs" }, { "Import failed: ${it.message ?: "Unknown error"}" })
