@@ -397,8 +397,6 @@ dependencies {
     implementation(project(":netease"))
     implementation(project(":canvas"))
     implementation(project(":applecanvas"))
-    implementation(project(":spotifycore"))
-
 
 
     implementation(libs.ktor.client.core)
