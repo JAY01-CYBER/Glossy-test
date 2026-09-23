@@ -3,7 +3,9 @@ package com.jay.glossy.spotify
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
+import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Arrangement
@@ -76,8 +78,7 @@ fun SpotifyLoginScreen(navController: NavController) {
     LaunchedEffect(Unit) {
         cookie = SpotifySession.cookie(context).takeIf(String::isNotBlank)
         checkingCookie = false
-        // Prewarming disabled to fix the black screen issue in Jetpack Compose
-        // if (cookie == null) SpotifyLoginPrewarm.warm(context)
+        // Prewarm removed to avoid Jetpack Compose detach/attach black screen issues
     }
 
     Column(
@@ -105,53 +106,60 @@ fun SpotifyLoginScreen(navController: NavController) {
                 "Sign in to Spotify to use Canvas and import playlists",
                 style = MaterialTheme.typography.bodyLarge,
             )
+            
             AndroidView(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 factory = { webContext ->
-                    // Adopt the prewarmed WebView when we have one — the login
-                    // page is already fetching while the user tapped through;
-                    // otherwise build a fresh one (it starts its own load).
-                    (SpotifyLoginPrewarm.take() ?: newSpotifyLoginWebView(webContext)).apply {
-                        fun saveCookieIfEarned() {
-                            val value = spDcFrom(
-                                CookieManager.getInstance().getCookie("https://open.spotify.com")
-                            )
-                            if (value.isNotBlank() && value != cookie) {
-                                scope.launch {
-                                    SpotifySession.saveCookie(webContext, value)
-                                    cookie = value
+                    WebView(webContext).apply {
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.userAgentString = SPOTIFY_WEBVIEW_USER_AGENT
+                        settings.cacheMode = WebSettings.LOAD_NO_CACHE
+                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                        
+                        CookieManager.getInstance().apply {
+                            setAcceptCookie(true)
+                            setAcceptThirdPartyCookies(this@apply, true)
+                        }
+
+                        webViewClient = object : WebViewClient() {
+                            override fun onPageFinished(view: WebView, url: String) {
+                                val value = spDcFrom(
+                                    CookieManager.getInstance().getCookie("https://open.spotify.com")
+                                )
+                                if (value.isNotBlank() && value != cookie) {
+                                    scope.launch {
+                                        SpotifySession.saveCookie(webContext, value)
+                                        cookie = value
+                                    }
                                 }
                             }
                         }
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageFinished(view: WebView, url: String) {
-                                saveCookieIfEarned()
-                            }
-                        }
-                        // A parked/prewarmed page may already sit past the
-                        // login redirect — check immediately instead of
-                        // waiting for a navigation that may never come.
-                        saveCookieIfEarned()
+                        
+                        loadUrl(SPOTIFY_LOGIN_URL)
                     }
-                },
-                onRelease = { view ->
-                    // Keep the loaded page alive for the next visit instead
-                    // of paying the full page load again.
-                    SpotifyLoginPrewarm.park(view)
-                },
+                }
             )
+            
             OutlinedButton(
                 onClick = {
                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(SPOTIFY_LOGIN_URL)))
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Trouble? Log in via browser instead") }
+            
             TextButton(
                 onClick = { showTokenLogin = !showTokenLogin },
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             ) {
                 Text(if (showTokenLogin) "Hide sp_dc token login" else "Have an sp_dc token? Paste it instead")
             }
+            
             if (showTokenLogin) {
                 TokenLoginCard(
                     tokenInput = tokenInput,
@@ -177,79 +185,82 @@ fun SpotifyLoginScreen(navController: NavController) {
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-            Text(
-                "Spotify connected",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            OutlinedTextField(
-                value = playlistUrl,
-                onValueChange = { playlistUrl = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Spotify playlist URL") },
-                singleLine = true,
-            )
-            OutlinedTextField(
-                value = playlistName,
-                onValueChange = { playlistName = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Local playlist name") },
-                singleLine = true,
-            )
-            Button(
-                enabled = !isImporting && playlistUrl.isNotBlank(),
-                onClick = {
-                    isImporting = true
-                    message = null
-                    scope.launch {
-                        message = runCatching {
-                            SpotifyPlaylistImporter.importPlaylist(
-                                context = context,
-                                database = database,
-                                playlistUrl = playlistUrl,
-                                playlistName = playlistName.ifBlank { "Spotify playlist" },
-                            )
-                        }.fold({ "Imported $it songs" }, { "Import failed: ${it.message ?: "Unknown error"}" })
-                        isImporting = false
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) { if (isImporting) CircularProgressIndicator(Modifier.size(20.dp)) else Text("Import playlist") }
-            message?.let {
-                Text(it, style = MaterialTheme.typography.bodyMedium)
-            }
-            Spacer(Modifier.height(8.dp))
-            TextButton(
-                onClick = { showTokenLogin = !showTokenLogin },
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-            ) {
-                Text(if (showTokenLogin) "Hide sp_dc token login" else "Have an sp_dc token? Paste it instead")
-            }
-            if (showTokenLogin) {
-                TokenLoginCard(
-                    tokenInput = tokenInput,
-                    onTokenInputChange = { tokenInput = it },
-                    checking = checkingToken,
-                    status = tokenStatus,
-                    onSave = {
-                        checkingToken = true
-                        tokenStatus = null
+                Text(
+                    "Spotify connected",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                OutlinedTextField(
+                    value = playlistUrl,
+                    onValueChange = { playlistUrl = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Spotify playlist URL") },
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = playlistName,
+                    onValueChange = { playlistName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Local playlist name") },
+                    singleLine = true,
+                )
+                Button(
+                    enabled = !isImporting && playlistUrl.isNotBlank(),
+                    onClick = {
+                        isImporting = true
+                        message = null
                         scope.launch {
-                            tokenStatus = SpotifySession.saveAndValidateToken(context, tokenInput.trim())
-                            if (tokenStatus == "Spotify connected") cookie = SpotifySession.cookie(context)
-                            checkingToken = false
+                            message = runCatching {
+                                SpotifyPlaylistImporter.importPlaylist(
+                                    context = context,
+                                    database = database,
+                                    playlistUrl = playlistUrl,
+                                    playlistName = playlistName.ifBlank { "Spotify playlist" },
+                                )
+                            }.fold({ "Imported $it songs" }, { "Import failed: ${it.message ?: "Unknown error"}" })
+                            isImporting = false
                         }
                     },
-                )
-            }
-            OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        SpotifySession.clear(context)
-                        cookie = null
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Disconnect Spotify") }
+                    modifier = Modifier.fillMaxWidth(),
+                ) { if (isImporting) CircularProgressIndicator(Modifier.size(20.dp)) else Text("Import playlist") }
+                
+                message?.let {
+                    Text(it, style = MaterialTheme.typography.bodyMedium)
+                }
+                
+                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    onClick = { showTokenLogin = !showTokenLogin },
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                ) {
+                    Text(if (showTokenLogin) "Hide sp_dc token login" else "Have an sp_dc token? Paste it instead")
+                }
+                
+                if (showTokenLogin) {
+                    TokenLoginCard(
+                        tokenInput = tokenInput,
+                        onTokenInputChange = { tokenInput = it },
+                        checking = checkingToken,
+                        status = tokenStatus,
+                        onSave = {
+                            checkingToken = true
+                            tokenStatus = null
+                            scope.launch {
+                                tokenStatus = SpotifySession.saveAndValidateToken(context, tokenInput.trim())
+                                if (tokenStatus == "Spotify connected") cookie = SpotifySession.cookie(context)
+                                checkingToken = false
+                            }
+                        },
+                    )
+                }
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            SpotifySession.clear(context)
+                            cookie = null
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Disconnect Spotify") }
             }
         }
     }
