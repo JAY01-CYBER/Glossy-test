@@ -1,6 +1,8 @@
 package com.jay.glossy.spotify
 
 import android.annotation.SuppressLint
+import android.content.Intent
+import android.net.Uri
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebSettings
@@ -111,7 +113,7 @@ fun SpotifyLoginScreen(navController: NavController) {
                         
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
-                        settings.userAgentString = SPOTIFY_WEBVIEW_USER_AGENT
+                        settings.userAgentString = WEB_SPOTIFY_USER_AGENT
                         settings.cacheMode = WebSettings.LOAD_NO_CACHE
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                         
@@ -134,7 +136,7 @@ fun SpotifyLoginScreen(navController: NavController) {
                             }
                         }
                         
-                        loadUrl(SPOTIFY_LOGIN_URL)
+                        loadUrl(WEB_SPOTIFY_LOGIN_URL)
                     }
                 }
             )
@@ -219,5 +221,6 @@ private fun spDcFrom(cookieHeader: String?): String =
         .orEmpty()
         .trim()
 
-private const val SPOTIFY_LOGIN_URL = "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F"
-private const val SPOTIFY_WEBVIEW_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
+// Naam badal diye gaye hain taaki purani file se clash na ho
+private const val WEB_SPOTIFY_LOGIN_URL = "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F"
+private const val WEB_SPOTIFY_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
