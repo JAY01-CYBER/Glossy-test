@@ -41,7 +41,6 @@ include(":youlyplus")
 include(":unison")
 include(":simpmusic")
 include(":netease")
-include(":spotifycore")
 
 
 // Use a local copy of NewPipe Extractor by uncommenting the lines below.
