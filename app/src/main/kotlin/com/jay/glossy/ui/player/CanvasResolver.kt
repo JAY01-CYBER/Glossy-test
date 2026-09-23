@@ -97,7 +97,7 @@ object CanvasResolver {
 
             CanvasStyle.SPOTIFY ->
                 SpotifySession.token(context)?.let {
-                    SpotifyCanvasProvider.getBySongArtist(normalizedTitle, normalizedArtist, it)
+                    SpotifyCanvasProvider.getBySongArtist(normalizedTitle, normalizedArtist)
                 }
                     // Spotify rarely has canvases for every track; fall back to the
                     // Glossy engine so an animated canvas still shows instead of nothing.
@@ -160,7 +160,7 @@ object CanvasResolver {
             launch {
                 val value = try {
                     SpotifySession.token(context)?.let {
-                        SpotifyCanvasProvider.getBySongArtist(song, artist, it)
+                        SpotifyCanvasProvider.getBySongArtist(song, artist)
                     }
                 } catch (e: CancellationException) {
                     throw e
