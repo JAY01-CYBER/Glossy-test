@@ -1,20 +1,12 @@
 plugins {
-    id("com.android.library")
+    id("java-library")
+    kotlin("jvm")
     alias(libs.plugins.kotlin.serialization)
 }
 
-android {
-    namespace = "com.jay.glossy.spotifycore"
-    compileSdk = 37
-
-    defaultConfig {
-        minSdk = 26
-    }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_21
-        targetCompatibility = JavaVersion.VERSION_21
-    }
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 
 kotlin {
