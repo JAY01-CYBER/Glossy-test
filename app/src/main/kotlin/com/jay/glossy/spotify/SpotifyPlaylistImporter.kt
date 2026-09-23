@@ -25,16 +25,46 @@ import java.net.URL
 object SpotifyPlaylistImporter {
     private val json = Json { ignoreUnknownKeys = true }
     private const val RETRY_ATTEMPTS = 4
-    private const val MAX_CONCURRENT_RESOLUTIONS = 8 // ArchiveTune jaisa concurrent batching
+    private const val MAX_CONCURRENT_RESOLUTIONS = 8
 
+    data class SpotifySimplePlaylist(val id: String, val name: String, val tracks: Int)
+
+    // ArchiveTune jaisa automatic playlist aur profile fetcher
+    suspend fun fetchMyProfileAndPlaylists(context: Context): Pair<String, List<SpotifySimplePlaylist>> = withContext(Dispatchers.IO) {
+        val token = SpotifySession.token(context) ?: error("Spotify session expired")
+        
+        // 1. Fetch Profile (To show "Connected as Jay...")
+        var userName = "Spotify User"
+        runCatching {
+            val meRoot = fetchWithRetry("https://api.spotify.com/v1/me", token)
+            userName = meRoot["display_name"]?.jsonPrimitive?.contentOrNull ?: "Spotify User"
+        }
+
+        // 2. Fetch User's Playlists automatically
+        val playlists = mutableListOf<SpotifySimplePlaylist>()
+        var next: String? = "https://api.spotify.com/v1/me/playlists?limit=50"
+        while (next != null) {
+            val root = fetchWithRetry(next!!, token)
+            playlists += root["items"]?.jsonArray.orEmpty().mapNotNull { item ->
+                val pl = item.jsonObject
+                val id = pl["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                val name = pl["name"]?.jsonPrimitive?.contentOrNull ?: "Unknown Playlist"
+                val tracks = pl["tracks"]?.jsonObject?.get("total")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+                SpotifySimplePlaylist(id, name, tracks)
+            }
+            next = root["next"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() && it != "null" }
+        }
+        
+        userName to playlists
+    }
+
+    // Ab direct Playlist ID lega, URL parse karne ki zarurat nahi
     suspend fun importPlaylist(
         context: Context,
         database: MusicDatabase,
-        playlistUrl: String,
+        playlistId: String,
         playlistName: String,
     ): Int = withContext(Dispatchers.IO) {
-        val playlistId = Regex("playlist[/:]([A-Za-z0-9]+)").find(playlistUrl)?.groupValues?.get(1)
-            ?: error("Enter a Spotify playlist URL")
         val token = SpotifySession.token(context) ?: error("Spotify session expired")
         val tracks = fetchTracks(playlistId, token)
         if (tracks.isEmpty()) error("Playlist has no playable tracks")
@@ -43,7 +73,6 @@ object SpotifyPlaylistImporter {
         database.transaction { insert(entity) }
         val localPlaylist = database.playlist(entity.id).firstOrNull() ?: error("Could not create local playlist")
         
-        // Concurrent fetching for lightning speed
         val songIds = mutableListOf<String>()
         tracks.chunked(MAX_CONCURRENT_RESOLUTIONS).forEach { chunk ->
             val resolvedChunk = coroutineScope {
