@@ -24,7 +24,10 @@ internal const val SPOTIFY_WEBVIEW_USER_AGENT =
  */
 @SuppressLint("SetJavaScriptEnabled")
 internal fun newSpotifyLoginWebView(context: Context): WebView =
-    WebView(context.applicationContext).apply {
+    WebView(context).apply { // Changed applicationContext to just context
+        setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null)
+        
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.userAgentString = SPOTIFY_WEBVIEW_USER_AGENT
