@@ -8,6 +8,9 @@ import com.metrolist.innertube.YouTube.SearchFilter
 import com.metrolist.innertube.models.SongItem
 import com.metrolist.models.toMediaMetadata
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
@@ -22,6 +25,7 @@ import java.net.URL
 object SpotifyPlaylistImporter {
     private val json = Json { ignoreUnknownKeys = true }
     private const val RETRY_ATTEMPTS = 4
+    private const val MAX_CONCURRENT_RESOLUTIONS = 8 // Batching limit to prevent network overload
 
     suspend fun importPlaylist(
         context: Context,
@@ -38,24 +42,30 @@ object SpotifyPlaylistImporter {
         val entity = PlaylistEntity(name = playlistName)
         database.transaction { insert(entity) }
         val localPlaylist = database.playlist(entity.id).firstOrNull() ?: error("Could not create local playlist")
-        val songIds = tracks.mapNotNull { track ->
-            YouTube.search("${track.title} ${track.artist}", SearchFilter.FILTER_SONG).getOrNull()?.items
-                ?.filterIsInstance<SongItem>()?.firstOrNull()?.let { song ->
-                    val metadata = song.toMediaMetadata()
-                    database.transaction { insert(metadata) }
-                    metadata.id to null
-                }
+        
+        // Concurrent fetching: dramatically speeds up YouTube resolution
+        val songIds = mutableListOf<String>()
+        tracks.chunked(MAX_CONCURRENT_RESOLUTIONS).forEach { chunk ->
+            val resolvedChunk = coroutineScope {
+                chunk.map { track ->
+                    async {
+                        YouTube.search("${track.title} ${track.artist}", SearchFilter.FILTER_SONG).getOrNull()?.items
+                            ?.filterIsInstance<SongItem>()?.firstOrNull()?.let { song ->
+                                val metadata = song.toMediaMetadata()
+                                database.transaction { insert(metadata) }
+                                metadata.id
+                            }
+                    }
+                }.awaitAll().filterNotNull()
+            }
+            songIds.addAll(resolvedChunk)
         }
-        database.addSongsToPlaylist(localPlaylist, songIds)
+        
+        val pairList = songIds.map { it to null }
+        database.addSongsToPlaylist(localPlaylist, pairList)
         songIds.size
     }
 
-    /**
-     * api.spotify.com turns away a request carrying only the bearer token
-     * with a 429 — the Client-Token header is required alongside it. When a
-     * 429 still comes back (per-page rate limiting), it is retried with
-     * exponential backoff instead of failing the whole import.
-     */
     private suspend fun fetchTracks(playlistId: String, token: SpotifySession.Token): List<SpotifyTrack> {
         val tracks = mutableListOf<SpotifyTrack>()
         var next: String? = "https://api.spotify.com/v1/playlists/$playlistId/tracks?limit=100"
@@ -77,7 +87,6 @@ object SpotifyPlaylistImporter {
         var backoffMs = 1_000L
         repeat(RETRY_ATTEMPTS) { attempt ->
             if (attempt > 0) {
-                // Honor Spotify's Retry-After hint when present, else back off.
                 delay(backoffMs)
                 backoffMs *= 2
             }
@@ -93,7 +102,6 @@ object SpotifyPlaylistImporter {
                     return json.parseToJsonElement(connection.inputStream.bufferedReader().use { it.readText() }).jsonObject
                 }
                 if (code != 429) error("Spotify returned HTTP $code")
-                // 429: fall through to the next retry attempt.
             } finally {
                 connection.disconnect()
             }
