@@ -25,7 +25,7 @@ import java.net.URL
 object SpotifyPlaylistImporter {
     private val json = Json { ignoreUnknownKeys = true }
     private const val RETRY_ATTEMPTS = 4
-    private const val MAX_CONCURRENT_RESOLUTIONS = 8 // Batching limit to prevent network overload
+    private const val MAX_CONCURRENT_RESOLUTIONS = 8 // ArchiveTune jaisa concurrent batching
 
     suspend fun importPlaylist(
         context: Context,
@@ -43,7 +43,7 @@ object SpotifyPlaylistImporter {
         database.transaction { insert(entity) }
         val localPlaylist = database.playlist(entity.id).firstOrNull() ?: error("Could not create local playlist")
         
-        // Concurrent fetching: dramatically speeds up YouTube resolution
+        // Concurrent fetching for lightning speed
         val songIds = mutableListOf<String>()
         tracks.chunked(MAX_CONCURRENT_RESOLUTIONS).forEach { chunk ->
             val resolvedChunk = coroutineScope {
