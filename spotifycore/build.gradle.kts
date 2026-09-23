@@ -1,17 +1,10 @@
 plugins {
-    kotlin("jvm") // Wapas isko bina version ke use karein
+    kotlin("jvm")
     alias(libs.plugins.kotlin.serialization)
 }
 
 kotlin {
     jvmToolchain(21)
-}
-
-// Ye block sabse zaroori hai, isko mat hatana
-sourceSets {
-    main {
-        java.srcDirs("src/main/kotlin")
-    }
 }
 
 dependencies {
