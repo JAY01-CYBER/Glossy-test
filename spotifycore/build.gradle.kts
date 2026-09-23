@@ -1,6 +1,5 @@
 plugins {
-    // Isko direct TOML alias se call karein taaki version 2.4.10 correctly apply ho
-    alias(libs.plugins.kotlin.jvm)
+    kotlin("jvm") // Wapas isko bina version ke use karein
     alias(libs.plugins.kotlin.serialization)
 }
 
@@ -8,7 +7,7 @@ kotlin {
     jvmToolchain(21)
 }
 
-// Ye block add karna zaroori hai taaki Gradle ko exact path pata chal jaye
+// Ye block sabse zaroori hai, isko mat hatana
 sourceSets {
     main {
         java.srcDirs("src/main/kotlin")
