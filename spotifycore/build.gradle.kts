@@ -1,5 +1,4 @@
 plugins {
-    // Gradle TOML alias error को बाईपास करने के लिए डायरेक्ट kotlin("jvm") लगा दिया है
     kotlin("jvm")
     alias(libs.plugins.kotlin.serialization)
 }
@@ -10,12 +9,16 @@ java {
 }
 
 dependencies {
-    // Spotify API (Ktor, Coroutines, Serialization) के लिए ज़रूरी डिपेंडेंसीज़ 
-    implementation(libs.kotlinx.coroutines.core)
-    implementation(libs.kotlinx.serialization.json)
+    val coroutinesVersion = "1.7.3"
+    val serializationVersion = "1.6.3"
+    val ktorVersion = "2.3.11"
+
+    // Using direct string coordinates to bypass the 'Unresolved reference' Version Catalog errors
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutinesVersion")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$serializationVersion")
     
-    implementation(libs.ktor.client.core)
-    implementation(libs.ktor.client.okhttp)
-    implementation(libs.ktor.client.content.negotiation)
-    implementation(libs.ktor.serialization.kotlinx.json)
+    implementation("io.ktor:ktor-client-core:$ktorVersion")
+    implementation("io.ktor:ktor-client-okhttp:$ktorVersion")
+    implementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
 }
