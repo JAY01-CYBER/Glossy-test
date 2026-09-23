@@ -1,8 +1,6 @@
 package com.jay.glossy.spotify
 
 import android.annotation.SuppressLint
-import android.content.Intent
-import android.net.Uri
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebSettings
@@ -10,6 +8,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,7 +26,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -36,12 +35,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavController
@@ -62,14 +61,34 @@ fun SpotifyLoginScreen(navController: NavController) {
     
     var cookie by remember { mutableStateOf<String?>(null) }
     var checkingCookie by remember { mutableStateOf(true) }
-    var playlistUrl by rememberSaveable { mutableStateOf("") }
-    var playlistName by rememberSaveable { mutableStateOf("") }
-    var isImporting by remember { mutableStateOf(false) }
+    
+    // Naye variables ArchiveTune jaisa data dikhane ke liye
+    var userName by remember { mutableStateOf<String?>(null) }
+    var myPlaylists by remember { mutableStateOf<List<SpotifyPlaylistImporter.SpotifySimplePlaylist>>(emptyList()) }
+    var isFetchingData by remember { mutableStateOf(false) }
+    
+    var importingPlaylistId by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         cookie = SpotifySession.cookie(context).takeIf(String::isNotBlank)
         checkingCookie = false
+    }
+    
+    // Jaise hi login ho, user ki profile aur playlists fetch kar lo
+    LaunchedEffect(cookie) {
+        if (cookie != null) {
+            isFetchingData = true
+            runCatching {
+                SpotifyPlaylistImporter.fetchMyProfileAndPlaylists(context)
+            }.onSuccess { (name, lists) ->
+                userName = name
+                myPlaylists = lists
+            }.onFailure { 
+                message = "Failed to load playlists"
+            }
+            isFetchingData = false
+        }
     }
 
     Column(
@@ -101,7 +120,6 @@ fun SpotifyLoginScreen(navController: NavController) {
             CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
             Spacer(modifier = Modifier.weight(1f))
         } else if (cookie == null) {
-            // Clean, full-screen WebView (ArchiveTune Style)
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { webContext ->
@@ -110,7 +128,6 @@ fun SpotifyLoginScreen(navController: NavController) {
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
                         )
-                        
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
                         settings.userAgentString = WEB_SPOTIFY_USER_AGENT
@@ -123,7 +140,6 @@ fun SpotifyLoginScreen(navController: NavController) {
 
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView, url: String) {
-                                // Background me chupke se token (cookie) nikalna
                                 val value = spDcFrom(
                                     CookieManager.getInstance().getCookie("https://open.spotify.com")
                                 )
@@ -135,84 +151,111 @@ fun SpotifyLoginScreen(navController: NavController) {
                                 }
                             }
                         }
-                        
                         loadUrl(WEB_SPOTIFY_LOGIN_URL)
                     }
                 }
             )
         } else {
-            // Connected State UI (Fast Playlist Import)
+            // Connected UI - ArchiveTune jaisa
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    "Spotify connected",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                OutlinedTextField(
-                    value = playlistUrl,
-                    onValueChange = { playlistUrl = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Spotify playlist URL") },
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    value = playlistName,
-                    onValueChange = { playlistName = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Local playlist name") },
-                    singleLine = true,
-                )
-                Button(
-                    enabled = !isImporting && playlistUrl.isNotBlank(),
-                    onClick = {
-                        isImporting = true
-                        message = null
-                        scope.launch {
-                            message = runCatching {
-                                SpotifyPlaylistImporter.importPlaylist(
-                                    context = context,
-                                    database = database,
-                                    playlistUrl = playlistUrl,
-                                    playlistName = playlistName.ifBlank { "Spotify playlist" },
-                                )
-                            }.fold({ "Imported $it songs superfast!" }, { "Import failed: ${it.message ?: "Unknown error"}" })
-                            isImporting = false
+                
+                if (isFetchingData) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                    Text("Loading your library...", modifier = Modifier.align(Alignment.CenterHorizontally))
+                } else {
+                    // Profile Info
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Connected as ${userName ?: "User"}",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "${myPlaylists.size} playlists available",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { 
-                    if (isImporting) CircularProgressIndicator(Modifier.size(20.dp)) 
-                    else Text("Import playlist") 
+                    }
+
+                    message?.let {
+                        Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                    }
+
+                    // Playlists List
+                    Text("Your Playlists", style = MaterialTheme.typography.titleMedium)
+                    
+                    myPlaylists.forEach { playlist ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(playlist.name, style = MaterialTheme.typography.bodyLarge)
+                                Text("${playlist.tracks} tracks", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            
+                            Button(
+                                enabled = importingPlaylistId == null && playlist.tracks > 0,
+                                onClick = {
+                                    importingPlaylistId = playlist.id
+                                    message = "Importing ${playlist.name}..."
+                                    scope.launch {
+                                        message = runCatching {
+                                            SpotifyPlaylistImporter.importPlaylist(
+                                                context = context,
+                                                database = database,
+                                                playlistId = playlist.id,
+                                                playlistName = playlist.name,
+                                            )
+                                        }.fold({ "Imported $it songs to your library!" }, { "Import failed: ${it.message}" })
+                                        importingPlaylistId = null
+                                    }
+                                }
+                            ) {
+                                if (importingPlaylistId == playlist.id) {
+                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Text("Import")
+                                }
+                            }
+                        }
+                    }
                 }
                 
-                message?.let {
-                    Text(it, style = MaterialTheme.typography.bodyMedium)
-                }
-                
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(16.dp))
                 
                 OutlinedButton(
                     onClick = {
                         scope.launch {
                             SpotifySession.clear(context)
                             cookie = null
-                            CookieManager.getInstance().removeAllCookies(null) // Clear browser session
+                            userName = null
+                            myPlaylists = emptyList()
+                            CookieManager.getInstance().removeAllCookies(null)
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text("Disconnect Spotify") }
+                ) { Text("Log out") }
+                
+                Spacer(Modifier.height(24.dp))
             }
         }
     }
 }
 
-/** Extract the sp_dc cookie value from a raw Cookie header string. */
 private fun spDcFrom(cookieHeader: String?): String =
     cookieHeader.orEmpty()
         .split(';')
@@ -221,6 +264,5 @@ private fun spDcFrom(cookieHeader: String?): String =
         .orEmpty()
         .trim()
 
-// Naam badal diye gaye hain taaki purani file se clash na ho
 private const val WEB_SPOTIFY_LOGIN_URL = "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F"
 private const val WEB_SPOTIFY_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
