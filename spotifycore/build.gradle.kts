@@ -1,17 +1,20 @@
 plugins {
-    alias(libs.plugins.kotlin.jvm)
+    id("org.jetbrains.kotlin.jvm")
     alias(libs.plugins.kotlin.serialization)
 }
 
 kotlin {
-    jvmToolchain(21) // App module ke Java 21 ke sath match karne ke liye
+    jvmToolchain(21)
 }
 
 dependencies {
-    implementation(libs.coroutines.core)
-    implementation(libs.serialization.json)
+    // Direct coordinates since they are not in your version catalog
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+    
+    // Ktor libraries using your version catalog aliases where available
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.content.negotiation)
-    implementation(libs.ktor.serialization.kotlinx.json)
+    implementation(libs.ktor.serialization.json)
 }
