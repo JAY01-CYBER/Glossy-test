@@ -294,6 +294,11 @@ val ScrobbleMinSongDurationKey = intPreferencesKey("scrobbleMinSongDuration")
 val ScrobbleDelaySecondsKey = intPreferencesKey("scrobbleDelaySeconds")
 
 val ChipSortTypeKey = stringPreferencesKey("chipSortType")
+
+enum class LibraryFilter {
+    LIBRARY, PLAYLISTS, SONGS, ALBUMS, ARTISTS, PODCASTS, SPOTIFY
+}
+
 val SongSortTypeKey = stringPreferencesKey("songSortType")
 val SongSortDescendingKey = booleanPreferencesKey("songSortDescending")
 val PlaylistSongSortTypeKey = stringPreferencesKey("playlistSongSortType")
