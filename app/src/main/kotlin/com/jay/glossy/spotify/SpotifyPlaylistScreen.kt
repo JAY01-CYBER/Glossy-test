@@ -20,7 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.CircularWavyProgressIndicator
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -77,7 +77,7 @@ import com.jay.glossy.spotify.SpotifyPlaylistQueue
 import com.jay.glossy.spotify.SpotifyPlaylistViewModel
 import com.jay.glossy.spotifycore.models.SpotifyTrack
 import com.jay.glossy.ui.component.DraggableScrollbar
-import com.jay.glossy.ui.component.EmptyPlaceholder
+import com.jay.glossy.ui.component.ExpressiveEmptyPlaceholder
 import com.jay.glossy.ui.component.ExpressivePullToRefreshBox
 import com.jay.glossy.ui.component.IconButton
 import com.jay.glossy.ui.component.MediaDetailAction
@@ -85,15 +85,36 @@ import com.jay.glossy.ui.component.MediaDetailHero
 import com.jay.glossy.ui.component.MediaDetailIconAction
 import com.jay.glossy.ui.component.SpotifyTrackListItem
 import com.jay.glossy.ui.utils.HeaderDownloadItem
-import com.jay.glossy.ui.utils.HeaderDownloadProgressIndicator
 import com.jay.glossy.ui.utils.HeaderDownloadState
 import com.jay.glossy.ui.utils.backToMain
 import com.jay.glossy.ui.utils.headerDownloadState
-import com.jay.glossy.ui.utils.resize
 import com.jay.glossy.ui.utils.sendAddMissingDownloads
 import com.jay.glossy.ui.utils.sendRemoveDownloads
 import com.jay.glossy.utils.makeTimeString
 import kotlin.math.abs
+
+@Composable
+fun HeaderDownloadProgressIndicator(
+    progress: Float,
+    paused: Boolean,
+    icon: Int,
+    modifier: Modifier = Modifier
+) {
+    Box(contentAlignment = Alignment.Center, modifier = modifier) {
+        CircularProgressIndicator(
+            progress = { progress },
+            modifier = Modifier.size(22.dp),
+            strokeWidth = 2.dp,
+            color = if (paused) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary
+        )
+        Icon(
+            painter = painterResource(icon),
+            contentDescription = null,
+            modifier = Modifier.size(12.dp),
+            tint = if (paused) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary
+        )
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -116,7 +137,7 @@ fun SpotifyPlaylistScreen(
     val lazyListState = rememberLazyListState()
     val systemBarsTopPadding = WindowInsets.systemBars.asPaddingValues().calculateTopPadding()
     val snackbarHostState = remember { SnackbarHostState() }
-    val downloadActionFailedMessage = stringResource(R.string.download_action_failed)
+    val downloadActionFailedMessage = "Download failed"
     val latestDownloads by rememberUpdatedState(downloads)
 
     val downloadState =
@@ -227,7 +248,7 @@ fun SpotifyPlaylistScreen(
 
     val thumbnailUrl =
         remember(playlist) {
-            playlist?.let { SpotifyMapper.getPlaylistThumbnail(it)?.resize(544, 544) }
+            playlist?.let { SpotifyMapper.getPlaylistThumbnail(it) }
         }
 
     val transparentAppBar by remember {
@@ -343,7 +364,7 @@ fun SpotifyPlaylistScreen(
                                 loadedDurationMs
                                     .takeIf { duration -> duration > 0L }
                                     ?.let(::makeTimeString),
-                            ).joinToString(MediaDetailMetadataSeparator)
+                            ).joinToString("  •  ")
 
                         MediaDetailHero(
                             title = currentPlaylist.name,
@@ -378,9 +399,9 @@ fun SpotifyPlaylistScreen(
                                     MediaDetailAction(
                                         contentDescription =
                                             if (downloadState == HeaderDownloadState.Completed) {
-                                                R.string.remove_download
+                                                R.string.remove_from_library
                                             } else {
-                                                R.string.download
+                                                R.string.add_to_library
                                             },
                                         contentColor = contentColor,
                                         enabled = !state.isLoading && !state.isResolvingDownloads,
@@ -393,8 +414,9 @@ fun SpotifyPlaylistScreen(
                                         },
                                     ) {
                                         if (state.isResolvingDownloads) {
-                                            CircularWavyProgressIndicator(
+                                            CircularProgressIndicator(
                                                 modifier = Modifier.size(22.dp),
+                                                strokeWidth = 2.dp
                                             )
                                         } else {
                                             when (val currentState = downloadState) {
@@ -426,7 +448,7 @@ fun SpotifyPlaylistScreen(
                                     }
 
                                     MediaDetailAction(
-                                        contentDescription = R.string.download,
+                                        contentDescription = R.string.add_to_library,
                                         contentColor = contentColor,
                                         onClick = {
                                             navController.navigate(
@@ -445,14 +467,14 @@ fun SpotifyPlaylistScreen(
                                 }
                                 MediaDetailIconAction(
                                     icon = R.drawable.sync,
-                                    contentDescription = R.string.spotify_reload_playlist,
+                                    contentDescription = R.string.add_to_library,
                                     contentColor = contentColor,
                                     onClick = viewModel::reload,
                                 )
                                 if (tracks.isNotEmpty()) {
                                     MediaDetailIconAction(
                                         icon = R.drawable.mix,
-                                        contentDescription = R.string.start_mix,
+                                        contentDescription = R.string.add_to_library,
                                         contentColor = contentColor,
                                         onClick = { playPlaylist(shuffled = true) },
                                     )
@@ -472,7 +494,7 @@ fun SpotifyPlaylistScreen(
                                 .height(160.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        CircularWavyProgressIndicator()
+                        CircularProgressIndicator()
                     }
                 }
             }
@@ -490,16 +512,9 @@ fun SpotifyPlaylistScreen(
 
             if (!state.isLoading && state.errorMessage == null && filteredTracks.isEmpty()) {
                 item(key = "empty") {
-                    EmptyPlaceholder(
+                    ExpressiveEmptyPlaceholder(
                         icon = R.drawable.music_note,
-                        text =
-                            stringResource(
-                                if (query.text.isBlank()) {
-                                    R.string.spotify_no_tracks
-                                } else {
-                                    R.string.ai_model_no_results
-                                },
-                            ),
+                        text = if (query.text.isBlank()) "No tracks found in this playlist" else "No results",
                     )
                 }
             }
@@ -521,7 +536,7 @@ fun SpotifyPlaylistScreen(
                     isPlaying = isPlaying && !trackIsResolving,
                     trailingContent = {
                         if (trackIsResolving) {
-                            CircularWavyProgressIndicator(modifier = Modifier.size(24.dp))
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                         }
                     },
                     modifier =
@@ -584,7 +599,7 @@ fun SpotifyPlaylistScreen(
                     )
                 } else if (showTopBarTitle) {
                     Text(
-                        text = playlist?.name ?: stringResource(R.string.spotify_playlists),
+                        text = playlist?.name ?: "Spotify Playlists",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -644,10 +659,6 @@ fun SpotifyPlaylistScreen(
 private fun SpotifyTrack.isResolvedAs(mediaMetadata: MediaMetadata?): Boolean {
     if (mediaMetadata == null) return false
 
-    mediaMetadata.spotifyTrackId?.let { spotifyTrackId ->
-        return id.isNotBlank() && spotifyTrackId == id
-    }
-
     val titleMatches = name.equals(mediaMetadata.title, ignoreCase = true)
     val durationMatches =
         durationMs <= 0 ||
@@ -674,5 +685,3 @@ private fun SpotifyTrack.isResolvedAs(mediaMetadata: MediaMetadata?): Boolean {
 
     return titleMatches && durationMatches && albumMatches && artistMatches && thumbnailMatches
 }
-
-private const val MediaDetailMetadataSeparator = "  •  "
