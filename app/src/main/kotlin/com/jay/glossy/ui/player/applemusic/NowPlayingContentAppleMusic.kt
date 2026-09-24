@@ -316,7 +316,12 @@ private fun AppleMusicMainView(
                     }
             ) {
                 Spacer(modifier = Modifier.height(20.dp))
-                AppleMusicMainTitleRow(typography = typography, bottomSheetState = bottomSheetState)
+                // 🛠️ FIX: Passed viewState here so it reaches AppleMusicHeaderActions
+                AppleMusicMainTitleRow(
+                    viewState = viewState, 
+                    typography = typography, 
+                    bottomSheetState = bottomSheetState
+                )
                 Spacer(modifier = Modifier.height(16.dp))
                 AppleMusicBottomCluster(
                     viewState = viewState,
@@ -495,6 +500,7 @@ private fun AppleMusicCanvasLayer(
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun AppleMusicMainTitleRow(
+    viewState: AppleMusicView,
     typography: AppleMusicTypography,
     bottomSheetState: BottomSheetState
 ) {
@@ -535,6 +541,7 @@ private fun AppleMusicMainTitleRow(
             }
         }
         Spacer(modifier = Modifier.width(12.dp))
-        AppleMusicHeaderActions(bottomSheetState = bottomSheetState)
+        // 🛠️ FIX: Passing viewState here to the shared function
+        AppleMusicHeaderActions(viewState = viewState, bottomSheetState = bottomSheetState)
     }
 }
