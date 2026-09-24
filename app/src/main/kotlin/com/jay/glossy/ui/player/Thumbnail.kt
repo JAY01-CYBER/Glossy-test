@@ -33,7 +33,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -617,12 +617,13 @@ fun Thumbnail(
                                 Modifier.fillMaxSize()
                             }
                         ) {
-                            items(
+                            // YAHAN PAR FIX HAI: Key Collision se bachne ke liye itemsIndexed aur ID_+_Index ka use kiya gaya hai.
+                            itemsIndexed(
                                 items = mediaItems,
-                                key = { item -> 
-                                    item.mediaId.ifEmpty { "unknown_${item.hashCode()}" }
+                                key = { index, item -> 
+                                    "${item.mediaId}_$index".ifEmpty { "unknown_${item.hashCode()}_$index" }
                                 }
-                            ) { item ->
+                            ) { index, item ->
                                 ThumbnailItem(
                                     item = item,
                                     dimensions = dimensions,
