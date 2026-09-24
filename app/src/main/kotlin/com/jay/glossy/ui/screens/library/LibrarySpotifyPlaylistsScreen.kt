@@ -3,7 +3,7 @@ package com.jay.glossy.ui.screens.library
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -59,7 +59,7 @@ fun LibrarySpotifyPlaylistsScreen(
                 }
             }
         } else {
-            itemsIndexed(playlists, key = { index, playlist -> "${playlist.id}_$index" }) { _, playlist ->
+            items(playlists, key = { it.id }) { playlist ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -88,14 +88,16 @@ fun LibrarySpotifyPlaylistsScreen(
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onBackground
                         )
                         Spacer(Modifier.height(4.dp))
-                        val trackCount = playlist.tracks?.total ?: 0
+                        
+                
+                        val totalTracks = playlist.tracks?.total ?: 0
                         Text(
-                            text = if (trackCount > 0) "$trackCount tracks" else "Spotify Playlist",
+                            text = "$totalTracks songs • Spotify",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
                         )
                     }
                 }
