@@ -2,6 +2,8 @@ package com.jay.glossy.spotify
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -14,7 +16,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
-import com.jay.glossy.R
 import com.jay.glossy.spotifycore.Spotify
 import com.jay.glossy.spotifycore.SpotifyAuth
 import com.jay.glossy.spotifycore.models.SpotifyPlaylist
@@ -24,6 +25,12 @@ import com.jay.glossy.utils.dataStore
 import com.jay.glossy.utils.safeDataStoreEdit
 import javax.inject.Inject
 import javax.inject.Singleton
+
+val SpotifySpDcKey = stringPreferencesKey("spotify_sp_dc")
+val SpotifyAccessTokenKey = stringPreferencesKey("spotify_access_token")
+val SpotifyAccessTokenExpiresAtKey = longPreferencesKey("spotify_token_expires_at")
+val SpotifyAccountNameKey = stringPreferencesKey("spotify_account_name")
+val SpotifyLibraryPlaylistsCacheKey = stringPreferencesKey("spotify_library_playlists_cache")
 
 @Singleton
 class SpotifyLibraryRepository @Inject constructor(
@@ -172,5 +179,3 @@ class SpotifyLibraryRepository @Inject constructor(
         }
     } catch (e: Exception) { Result.failure(e) }
 }
-
-val SpotifyLibraryPlaylistsCacheKey = androidx.datastore.preferences.core.stringPreferencesKey("spotify_library_playlists_cache")
