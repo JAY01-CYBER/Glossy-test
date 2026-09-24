@@ -25,11 +25,15 @@ class SpotifyAccountViewModel @Inject constructor(
     val playlists = repository.playlists
 
     init {
+        restoreSession()
+    }
+
+    fun restoreSession() {
         viewModelScope.launch(Dispatchers.IO) {
             val isAuth = repository.restoreSession()
             val name = context.dataStore.data.first()[SpotifyAccountNameKey].orEmpty()
             _uiState.update { it.copy(isAuthenticated = isAuth, accountName = name, isLoading = false) }
-            if (isAuth) repository.refreshPlaylists()
+            if (isAuth) refreshPlaylists()
         }
     }
 
@@ -40,9 +44,15 @@ class SpotifyAccountViewModel @Inject constructor(
                 .onSuccess { 
                     val name = context.dataStore.data.first()[SpotifyAccountNameKey].orEmpty()
                     _uiState.update { it.copy(isAuthenticated = true, accountName = name, isLoading = false) }
-                    repository.refreshPlaylists()
+                    refreshPlaylists()
                 }
                 .onFailure { _uiState.update { state -> state.copy(isLoading = false) } }
+        }
+    }
+
+    fun refreshPlaylists() {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.refreshPlaylists()
         }
     }
 
