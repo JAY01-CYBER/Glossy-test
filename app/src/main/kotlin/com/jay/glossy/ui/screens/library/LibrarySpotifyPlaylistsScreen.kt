@@ -64,8 +64,7 @@ fun LibrarySpotifyPlaylistsScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            // TODO: Jab screen ready ho jaye, ye line uncomment karein:
-                            // navController.navigate("spotify_playlist/${playlist.id}")
+                            navController.navigate("spotify_playlist/${playlist.id}")
                         }
                         .padding(horizontal = 24.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -92,8 +91,9 @@ fun LibrarySpotifyPlaylistsScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.height(4.dp))
+                        val trackCount = playlist.tracks?.total ?: 0
                         Text(
-                            text = "${playlist.tracks?.total ?: 0} tracks",
+                            text = if (trackCount > 0) "$trackCount tracks" else "Spotify Playlist",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
