@@ -1,6 +1,11 @@
 package com.jay.glossy.spotify
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -57,6 +62,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -73,7 +79,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.media3.exoplayer.offline.Download
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -91,7 +96,6 @@ import com.jay.glossy.LocalDownloadUtil
 import com.jay.glossy.LocalPlayerAwareWindowInsets
 import com.jay.glossy.LocalPlayerConnection
 import com.jay.glossy.R
-import com.jay.glossy.constants.AppBarHeight
 import com.jay.glossy.extensions.togglePlayPause
 import com.metrolist.models.MediaMetadata
 import com.jay.glossy.spotifycore.SpotifyMapper
@@ -278,7 +282,6 @@ fun SpotifyPlaylistScreen(
                         SpotifyPlaylistHeader(
                             name = currentPlaylist.name,
                             author = currentPlaylist.owner?.displayName,
-                            description = currentPlaylist.description,
                             thumbnailUrl = SpotifyMapper.getPlaylistThumbnail(currentPlaylist),
                             trackCount = trackCount,
                             loadedDurationMs = loadedDurationMs,
@@ -333,8 +336,11 @@ fun SpotifyPlaylistScreen(
                         } else if (inSelectMode) {
                             Checkbox(checked = track.id in selection, onCheckedChange = onCheckedChange)
                         } else {
-                            // Empty for now or put a more vert icon if you want a track menu later
-                            IconButton(onClick = {}, modifier = Modifier.size(48.dp)) {
+                            IconButton(
+                                onClick = {}, 
+                                onLongClick = {}, 
+                                modifier = Modifier.size(48.dp)
+                            ) {
                                 Icon(painterResource(R.drawable.more_vert), null, tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
                             }
                         }
@@ -453,7 +459,6 @@ fun SpotifyPlaylistScreen(
 private fun SpotifyPlaylistHeader(
     name: String,
     author: String?,
-    description: String?,
     thumbnailUrl: String?,
     trackCount: Int,
     loadedDurationMs: Long,
@@ -474,7 +479,6 @@ private fun SpotifyPlaylistHeader(
         modifier = modifier.fillMaxWidth().padding(bottom = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // EDGE-TO-EDGE ARTWORK BOX
         Box(
             modifier = Modifier.fillMaxWidth().height(screenHeight / 2)
         ) {
@@ -485,7 +489,6 @@ private fun SpotifyPlaylistHeader(
                 modifier = Modifier.fillMaxSize()
             )
 
-            // Soft Gradient overlay 
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -500,7 +503,6 @@ private fun SpotifyPlaylistHeader(
                     )
             )
 
-            // Title & Subtitle
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -535,7 +537,6 @@ private fun SpotifyPlaylistHeader(
                 )
             }
 
-            // TOP ROW BUTTONS (Back, Search, More)
             Row(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -569,12 +570,11 @@ private fun SpotifyPlaylistHeader(
                         modifier = Modifier.padding(horizontal = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = onSearchClick) {
+                        IconButton(onClick = onSearchClick, onLongClick = {}) {
                             Icon(painterResource(R.drawable.search), null)
                         }
                         IconButton(onClick = {
                             menuState.show {
-                                // Basic Playlist Menu
                                 Surface(
                                     shape = RoundedCornerShape(16.dp),
                                     color = MaterialTheme.colorScheme.surfaceContainer,
@@ -600,7 +600,7 @@ private fun SpotifyPlaylistHeader(
                                     }
                                 }
                             }
-                        }) {
+                        }, onLongClick = {}) {
                             Icon(painterResource(R.drawable.more_vert), null)
                         }
                     }
@@ -608,7 +608,6 @@ private fun SpotifyPlaylistHeader(
             }
         }
 
-        // BOTTOM ACTION ROW (Fixes the "chipak rhe" issue)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
