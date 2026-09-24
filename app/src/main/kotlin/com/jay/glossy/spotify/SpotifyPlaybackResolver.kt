@@ -66,8 +66,7 @@ object SpotifyPlaybackResolver {
             thumbnailUrl = SpotifyMapper.getTrackThumbnail(track) ?: best.thumbnail,
             duration = if (track.durationMs > 0) track.durationMs / 1000 else best.duration ?: -1,
             explicit = track.explicit || best.explicit,
-            album = track.album?.let { MediaMetadata.Album(id = it.id, title = it.name) } ?: bestMetadata.album,
-            spotifyTrackId = track.id.takeIf(String::isNotBlank),
+            album = track.album?.let { MediaMetadata.Album(id = it.id, title = it.name) } ?: bestMetadata.album
         )
 
         mutex.withLock {
