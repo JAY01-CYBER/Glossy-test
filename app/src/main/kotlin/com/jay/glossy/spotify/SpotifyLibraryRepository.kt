@@ -48,6 +48,21 @@ class SpotifyLibraryRepository @Inject constructor(
     private val tokenRefreshMutex = Mutex()
     private val spotifyCacheJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
+    // NAYA FUNCTION: Instant load from cache
+    suspend fun restoreCachedPlaylists() = withContext(Dispatchers.IO) {
+        if (_playlists.value.isNotEmpty()) return@withContext
+        val cached = context.dataStore.data.first()[SpotifyLibraryPlaylistsCacheKey].orEmpty()
+        if (cached.isBlank()) return@withContext
+        runCatching {
+            spotifyCacheJson.decodeFromString(
+                ListSerializer(SpotifyPlaylist.serializer()),
+                cached,
+            )
+        }.onSuccess { cachedPlaylists ->
+            _playlists.value = cachedPlaylists
+        }
+    }
+
     suspend fun restoreSession(): Boolean = withContext(Dispatchers.IO) {
         val prefs = context.dataStore.data.first()
         val token = prefs[SpotifyAccessTokenKey].orEmpty()
