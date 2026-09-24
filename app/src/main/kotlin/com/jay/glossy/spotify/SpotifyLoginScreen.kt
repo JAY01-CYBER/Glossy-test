@@ -7,8 +7,6 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,12 +18,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
-import com.jay.glossy.LocalDatabase
 import com.jay.glossy.LocalPlayerAwareWindowInsets
 import com.jay.glossy.R
 import com.jay.glossy.ui.component.IconButton
 import com.jay.glossy.ui.utils.backToMain
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("SetJavaScriptEnabled")
@@ -36,11 +32,6 @@ fun SpotifyLoginScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
-    val database = LocalDatabase.current
-    val scope = rememberCoroutineScope()
-    
-    var importingPlaylistId by remember { mutableStateOf<String?>(null) }
-    var message by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier
@@ -96,49 +87,30 @@ fun SpotifyLoginScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                    .padding(horizontal = 24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = MaterialTheme.shapes.medium
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Connected as ${uiState.accountName.ifBlank { "User" }}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Text("${playlists.size} playlists available", style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-
-                message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
-
-                Text("Your Playlists", style = MaterialTheme.typography.titleMedium)
+                Icon(
+                    painter = painterResource(R.drawable.check), 
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(64.dp)
+                )
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    text = "Connected as ${uiState.accountName.ifBlank { "User" }}", 
+                    style = MaterialTheme.typography.titleLarge, 
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "${playlists.size} playlists available in Library", 
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 
-                playlists.forEach { playlist ->
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(playlist.name, style = MaterialTheme.typography.bodyLarge)
-                            Text("${playlist.tracks?.total ?: 0} tracks", style = MaterialTheme.typography.bodySmall)
-                        }
-                        
-                        Button(
-                            enabled = importingPlaylistId == null,
-                            onClick = {
-                                importingPlaylistId = playlist.id
-                                message = "Importing ${playlist.name}..."
-                                scope.launch {
-                                    message = runCatching {
-                                        SpotifyPlaylistImporter.importPlaylist(database, playlist.id, playlist.name)
-                                    }.fold({ "Imported $it songs!" }, { "Import failed: ${it.message}" })
-                                    importingPlaylistId = null
-                                }
-                            }
-                        ) {
-                            if (importingPlaylistId == playlist.id) CircularProgressIndicator(Modifier.size(16.dp)) else Text("Import")
-                        }
-                    }
-                }
+                Spacer(Modifier.height(32.dp))
                 
                 OutlinedButton(
                     onClick = {
@@ -147,7 +119,6 @@ fun SpotifyLoginScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Log out") }
-                Spacer(Modifier.height(24.dp))
             }
         }
     }
