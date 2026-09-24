@@ -75,21 +75,22 @@ object SpotifyMapper {
     }
 
     /**
-     * Returns the best thumbnail URL from a Spotify playlist, preferring medium resolution.
+     * Returns the best thumbnail URL from a Spotify playlist, preferring high resolution.
      */
     fun getPlaylistThumbnail(playlist: SpotifyPlaylist): String? =
         playlist.images.let { images ->
-            // Prefer 300x300 or similar medium size, fallback to first
-            images.firstOrNull { it.width in 200..400 }?.url
+            // Sabse badi image (High-Res) uthao
+            images.maxByOrNull { it.width ?: 0 }?.url
                 ?: images.firstOrNull()?.url
         }
 
     /**
-     * Returns the best thumbnail URL from a Spotify track's album art.
+     * Returns the best thumbnail URL from a Spotify track's album art, preferring high resolution.
      */
     fun getTrackThumbnail(track: SpotifyTrack): String? =
         track.album?.images?.let { images ->
-            images.firstOrNull { it.width in 200..400 }?.url
+            // Sabse badi image (High-Res) uthao
+            images.maxByOrNull { it.width ?: 0 }?.url
                 ?: images.firstOrNull()?.url
         }
 
