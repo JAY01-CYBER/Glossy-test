@@ -123,7 +123,7 @@ fun SpotifyLoginScreen(
                         }
                         
                         Button(
-                            enabled = importingPlaylistId == null && (playlist.tracks?.total ?: 0) > 0,
+                            enabled = importingPlaylistId == null,
                             onClick = {
                                 importingPlaylistId = playlist.id
                                 message = "Importing ${playlist.name}..."
