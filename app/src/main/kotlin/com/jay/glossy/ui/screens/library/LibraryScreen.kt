@@ -1,8 +1,3 @@
-/**
- * Glossy Project (C) 2026
- * Licensed under GPL-3.0 | See git history for contributors
- */
-
 package com.jay.glossy.ui.screens.library
 
 import com.jay.glossy.R
@@ -63,6 +58,7 @@ fun LibraryScreen() {
                 ChipsRow(
                     chips = listOf(
                         LibraryFilter.PLAYLISTS to stringResource(R.string.filter_playlists),
+                        LibraryFilter.SPOTIFY to "Spotify",
                         LibraryFilter.SONGS to stringResource(R.string.filter_songs),
                         LibraryFilter.ALBUMS to stringResource(R.string.filter_albums),
                         LibraryFilter.ARTISTS to stringResource(R.string.filter_artists),
@@ -97,6 +93,10 @@ fun LibraryScreen() {
             LibraryFilter.PODCASTS -> LibraryPodcastsScreen(
                 navController,
                 { filterType = LibraryFilter.LIBRARY },
+            )
+            LibraryFilter.SPOTIFY -> LibrarySpotifyPlaylistsScreen(
+                navController = navController,
+                filterContent = filterContent
             )
         }
     }
