@@ -285,13 +285,12 @@ private fun AppleMusicMainView(
         }
     }
 
-    // Yahan Wapas Box layout laya gaya hai overlap/blending ke liye
     Box(modifier = Modifier.fillMaxSize()) {
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
             beyondViewportPageCount = 1,
-            // 🛠️ FIX: Yahan index (idx) add kar diya gaya hai taaki key humesha 100% unique rahe
+            // 🛠️ FIX: Unique key for each page to prevent "Key already used" crash
             key = { idx -> "${mediaItems.getOrNull(idx)?.mediaId}_$idx" } 
         ) { page ->
             val track = mediaItems.getOrNull(page)
@@ -346,7 +345,6 @@ private fun AppleMusicArtworkPage(
     val (canvasThumbnailAnimation) = rememberPreference(CanvasThumbnailAnimationKey, defaultValue = false)
     val tryShowCanvas = canvasThumbnailAnimation && isCurrentPage && track?.mediaId == mediaMetadata?.id
 
-    // Sirf is flag se opacity control hogi taaki thumbnail blank na ho
     var isVideoPlaying by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -375,8 +373,6 @@ private fun AppleMusicArtworkPage(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxSize()
-                        // graphicsLayer alpha skips the draw entirely at 0f — the
-                        // static artwork costs nothing once the canvas video is up.
                         .graphicsLayer {
                             alpha = imageAlpha
                             compositingStrategy = CompositingStrategy.Offscreen
@@ -473,8 +469,6 @@ private fun AppleMusicCanvasLayer(
     var canvasArtwork by remember(mediaId) { mutableStateOf<CanvasArtwork?>(null) }
 
     LaunchedEffect(mediaId) {
-        // Style-aware shared resolver (Glossy / ArchiveTune / Both) with
-        // playback caching — same engine as the classic player thumbnail.
         canvasArtwork = CanvasResolver.resolve(
             context = context,
             mediaId = mediaId,
@@ -542,122 +536,5 @@ private fun AppleMusicMainTitleRow(
         }
         Spacer(modifier = Modifier.width(12.dp))
         AppleMusicHeaderActions(bottomSheetState = bottomSheetState)
-    }
-}
-
-@Composable
-internal fun AppleMusicHeaderActions(
-    bottomSheetState: BottomSheetState,
-    modifier: Modifier = Modifier,
-) {
-    val playerConnection = LocalPlayerConnection.current ?: return
-    val menuState = LocalMenuState.current
-    val bottomSheetPageState = LocalBottomSheetPageState.current
-    val currentSong by playerConnection.currentSong.collectAsStateWithLifecycle(initialValue = null)
-    val mediaMetadata by playerConnection.mediaMetadata.collectAsStateWithLifecycle()
-    
-    val isEpisode = currentSong?.song?.isEpisode == true
-    val isFavorite = if (isEpisode) currentSong?.song?.inLibrary != null else currentSong?.song?.liked == true
-    
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .appleMusicPressInflate()
-                .size(32.dp)
-                .clip(CircleShape)
-                .clickable { playerConnection.toggleLike() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                painter = painterResource(if (isFavorite) R.drawable.favorite else R.drawable.favorite_border),
-                contentDescription = null,
-                tint = if (isFavorite) MaterialTheme.colorScheme.error else Color.White,
-                modifier = Modifier.size(24.dp),
-            )
-        }
-        
-        AppleMusicGlyphButton(
-            icon = R.drawable.more_vert, 
-            onClick = {
-                menuState.show {
-                    PlayerMenu(
-                        mediaMetadata = mediaMetadata,
-                        playerBottomSheetState = bottomSheetState,
-                        onShowDetailsDialog = {
-                            mediaMetadata?.id?.let {
-                                bottomSheetPageState.show { ShowMediaInfo(it) }
-                            }
-                        },
-                        onDismiss = menuState::dismiss
-                    )
-                }
-            }
-        )
-    }
-}
-
-@Composable
-internal fun AppleMusicCompactHeader(
-    typography: AppleMusicTypography,
-    modifier: Modifier = Modifier,
-    trailingContent: (@Composable () -> Unit)? = null,
-) {
-    val playerConnection = LocalPlayerConnection.current ?: return
-    val mediaMetadata by playerConnection.mediaMetadata.collectAsStateWithLifecycle()
-
-    val highResUrl = remember(mediaMetadata?.thumbnailUrl) {
-        mediaMetadata?.thumbnailUrl?.toHighRes()
-    }
-
-    Row(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(highResUrl)
-                .crossfade(300)
-                .build(),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.size(55.dp).clip(RoundedCornerShape(4.dp)),
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = mediaMetadata?.title ?: "",
-                style = typography.compactTitle,
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (mediaMetadata?.explicit == true) {
-                    Icon(
-                        painter = painterResource(R.drawable.explicit), 
-                        contentDescription = null, 
-                        tint = Color.White, 
-                        modifier = Modifier.size(16.dp).padding(end = 4.dp)
-                    )
-                }
-                Text(
-                    text = mediaMetadata?.artists?.joinToString { it.name } ?: "",
-                    style = typography.compactArtist,
-                    color = AppleMusicTextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        if (trailingContent != null) {
-            Spacer(modifier = Modifier.width(12.dp))
-            trailingContent()
-        }
     }
 }
