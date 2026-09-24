@@ -22,18 +22,21 @@ class SpotifyAccountViewModel @Inject constructor(
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(SpotifyAccountUiState(isLoading = true))
     val uiState: StateFlow<SpotifyAccountUiState> = _uiState.asStateFlow()
+    
     val playlists = repository.playlists
+    val isRefreshing = repository.isRefreshing // Exposing loading state for UI
 
     init {
-        restoreSession()
-    }
-
-    fun restoreSession() {
         viewModelScope.launch(Dispatchers.IO) {
+            // Screen khulte hi turant purani cached list load kar do
+            repository.restoreCachedPlaylists()
+            
+            // Phir background mein naya session/token restore karke playlists refresh karo
             val isAuth = repository.restoreSession()
             val name = context.dataStore.data.first()[SpotifyAccountNameKey].orEmpty()
             _uiState.update { it.copy(isAuthenticated = isAuth, accountName = name, isLoading = false) }
-            if (isAuth) refreshPlaylists()
+            
+            if (isAuth) repository.refreshPlaylists()
         }
     }
 
