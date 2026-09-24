@@ -3,7 +3,7 @@ package com.jay.glossy.ui.screens.library
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -41,7 +41,7 @@ fun LibrarySpotifyPlaylistsScreen(
         }
 
         if (!uiState.isAuthenticated) {
-            item {
+            item(key = "unauthenticated") {
                 Box(modifier = Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("Spotify is not connected", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -53,13 +53,17 @@ fun LibrarySpotifyPlaylistsScreen(
                 }
             }
         } else if (playlists.isEmpty()) {
-            item {
+            item(key = "empty") {
                 Box(modifier = Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
                     Text("No Spotify playlists found", style = MaterialTheme.typography.bodyMedium)
                 }
             }
         } else {
-            items(playlists, key = { it.id }) { playlist ->
+            // Yahan fix kiya hai: itemsIndexed use karke ID ke saath index jod diya hai
+            itemsIndexed(
+                items = playlists,
+                key = { index, playlist -> "${playlist.id}_$index" }
+            ) { index, playlist ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -92,7 +96,6 @@ fun LibrarySpotifyPlaylistsScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         
-                
                         val totalTracks = playlist.tracks?.total ?: 0
                         Text(
                             text = "$totalTracks songs • Spotify",
