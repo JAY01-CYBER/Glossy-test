@@ -55,8 +55,7 @@ fun SpotifyTrackListItem(
                 isActive = isActive,
                 isPlaying = isPlaying,
                 shape = RoundedCornerShape(12.dp),
-                placeholderIconRes = if (showSongIconPlaceholder) R.drawable.music_note else null,
-                modifier = Modifier.size(54.dp),
+                modifier = Modifier.size(54.dp)
             )
         },
         trailingContent = trailingContent,
