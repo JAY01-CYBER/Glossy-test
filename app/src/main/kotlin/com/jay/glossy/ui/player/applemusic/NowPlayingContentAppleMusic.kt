@@ -291,7 +291,8 @@ private fun AppleMusicMainView(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
             beyondViewportPageCount = 1,
-            key = { idx -> mediaItems.getOrNull(idx)?.mediaId ?: idx.toString() }
+            // 🛠️ FIX: Yahan index (idx) add kar diya gaya hai taaki key humesha 100% unique rahe
+            key = { idx -> "${mediaItems.getOrNull(idx)?.mediaId}_$idx" } 
         ) { page ->
             val track = mediaItems.getOrNull(page)
             val isCurrentPage = page == currentMediaIndex
@@ -603,6 +604,7 @@ internal fun AppleMusicHeaderActions(
 internal fun AppleMusicCompactHeader(
     typography: AppleMusicTypography,
     modifier: Modifier = Modifier,
+    trailingContent: (@Composable () -> Unit)? = null,
 ) {
     val playerConnection = LocalPlayerConnection.current ?: return
     val mediaMetadata by playerConnection.mediaMetadata.collectAsStateWithLifecycle()
@@ -652,6 +654,10 @@ internal fun AppleMusicCompactHeader(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+        if (trailingContent != null) {
+            Spacer(modifier = Modifier.width(12.dp))
+            trailingContent()
         }
     }
 }
