@@ -119,6 +119,8 @@ class SoundFxViewModel
 
         fun setAutoHeadroomEnabled(enabled: Boolean) = launch { repository.setAutoHeadroomEnabled(enabled) }
 
+        fun setBypass(enabled: Boolean) = launch { repository.setBypass(enabled) }
+
         /**
          * One-tap maximum sound boost: enables everything and pins output gain,
          * bass boost and virtualizer to their maximum (ArchiveTune-style).

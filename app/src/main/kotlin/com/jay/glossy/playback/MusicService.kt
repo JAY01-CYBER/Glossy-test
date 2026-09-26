@@ -27,6 +27,7 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.audiofx.AudioEffect
 import com.jay.glossy.playback.audio.VolumeNormalizationAudioProcessor
+import com.jay.glossy.playback.audio.NativeAudioProcessor
 import com.jay.glossy.utils.safeDataStoreEdit
 import android.net.ConnectivityManager
 import android.os.Binder
@@ -382,7 +383,8 @@ class MusicService :
 
     private fun applyEffectiveVolume() {
         if (!::player.isInitialized || isCrossfading) return
-        player.volume = calculateEffectiveVolume()
+        val vol = calculateEffectiveVolume()
+        player.volume = vol
     }
 
     // ========== GLOSSY AUDIO ROUTING LOGIC ==========
@@ -717,7 +719,11 @@ class MusicService :
 
         // Seed the system sound fx (equalizer/bass/virtualizer/output gain) with
         // startup prefs; they are applied to effects as soon as the audio session attaches.
-        soundFxController.apply(com.jay.glossy.eq.soundfx.SoundFxSettings.fromPreferences(startupPrefs!!))
+        run {
+            val settings = com.jay.glossy.eq.soundfx.SoundFxSettings.fromPreferences(startupPrefs!!)
+            soundFxController.apply(settings)
+            com.jay.glossy.playback.audio.NativeDspController.apply(settings)
+        }
         sleepTimer =
             SleepTimer(scope, player) { multiplier ->
                 sleepTimerVolumeMultiplier.value = multiplier
@@ -1016,6 +1022,7 @@ class MusicService :
             .distinctUntilChanged()
             .collectLatest(scope) { settings ->
                 soundFxController.apply(settings)
+                com.jay.glossy.playback.audio.NativeDspController.apply(settings)
             }
 
         combine(
@@ -1414,6 +1421,7 @@ class MusicService :
         equalizerService.addAudioProcessor(eqProcessor)
 
         val silenceProcessor = SilenceDetectorAudioProcessor { handleLongSilenceDetected() }
+        val nativeAudioProcessor = NativeAudioProcessor()
 
         // Set initial state — use pre-read prefs when available, otherwise fall back to DataStore
         val useAudioTrackPlaybackParams = if (prefs != null) {
@@ -1434,7 +1442,7 @@ class MusicService :
             ExoPlayer
                 .Builder(this)
                 .setMediaSourceFactory(createMediaSourceFactory())
-                .setRenderersFactory(createRenderersFactory(normalizationProcessor, eqProcessor, silenceProcessor, useAudioTrackPlaybackParams))
+                .setRenderersFactory(createRenderersFactory(normalizationProcessor, eqProcessor, silenceProcessor, nativeAudioProcessor, useAudioTrackPlaybackParams))
                 .setLoadControl(
                     // Start playback once ~750ms is buffered (media3's default is 1000ms) so first
                     // audio is audible a touch sooner. min/max/after-rebuffer match the media3 1.x
@@ -3921,6 +3929,7 @@ class MusicService :
         normalizationProcessor: VolumeNormalizationAudioProcessor,
         eqProcessor: CustomEqualizerAudioProcessor,
         silenceProcessor: SilenceDetectorAudioProcessor,
+        nativeAudioProcessor: NativeAudioProcessor,
         useAudioTrackPlaybackParams: Boolean,
     ) = object : DefaultRenderersFactory(this) {
         override fun buildAudioRenderers(
@@ -3981,6 +3990,7 @@ class MusicService :
                         normalizationProcessor,
                         eqProcessor,
                         silenceProcessor,
+                        nativeAudioProcessor,
                     ),
                     SilenceSkippingAudioProcessor(2_000_000, 20_000, 256),
                     SonicAudioProcessor(),

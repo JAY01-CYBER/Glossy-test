@@ -96,19 +96,34 @@ android {
     namespace = "com.jay.glossy"
     compileSdk = 37
 
+    // ==========================================
+    // C++ Engine Path Setup
+    // ==========================================
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
     defaultConfig {
         applicationId = applicationIdOverride ?: baseApplicationId
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.0.3"
+        versionCode = 4
+        versionName = "0.0.4"
         resValue("string", "app_name", appNameOverride ?: "Glossy")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        // ==========================================
+        // C++ Compiler Arguments
+        // ==========================================
+        externalNativeBuild {
+            cmake {
+                arguments("-DANDROID_STL=c++_shared")
+            }
         }
 
         // LastFM API keys from GitHub Secrets
@@ -215,6 +230,7 @@ android {
         compose = true
         buildConfig = true
         resValues = true
+        prefab = true // Prefab enabled for Google Oboe
     }
 
     dependenciesInfo {
@@ -398,7 +414,6 @@ dependencies {
     implementation(project(":canvas"))
     implementation(project(":applecanvas"))
 
-
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.okhttp)
@@ -424,8 +439,9 @@ dependencies {
     implementation("io.github.kyant0:backdrop:2.0.1")
     implementation("dev.chrisbanes.haze:haze:1.1.1")
     implementation("dev.chrisbanes.haze:haze-materials:1.1.1")
+    
+    // ==========================================
+    // C++ Audio Engine Dependencies
+    // ==========================================
+    implementation("com.google.oboe:oboe:1.8.1")
 }
-
-
-// Cache bust for spotifycore module update
-

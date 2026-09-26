@@ -209,6 +209,7 @@ val SoundFxBassBoostStrengthKey = intPreferencesKey("soundFxBassBoostStrength")
 val SoundFxVirtualizerEnabledKey = booleanPreferencesKey("soundFxVirtualizerEnabled")
 val SoundFxVirtualizerStrengthKey = intPreferencesKey("soundFxVirtualizerStrength")
 val SoundFxAutoHeadroomKey = booleanPreferencesKey("soundFxAutoHeadroom")
+val SoundFxBypassKey = booleanPreferencesKey("soundFxBypass")
 val SoundFxProfilesJsonKey = stringPreferencesKey("soundFxProfilesJson")
 
 val AutoLoadMoreKey = booleanPreferencesKey("autoLoadMore")

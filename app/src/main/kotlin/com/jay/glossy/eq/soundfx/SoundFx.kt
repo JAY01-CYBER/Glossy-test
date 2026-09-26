@@ -14,6 +14,7 @@ import com.jay.glossy.constants.SoundFxEnabledKey
 import com.jay.glossy.constants.SoundFxOutputGainEnabledKey
 import com.jay.glossy.constants.SoundFxOutputGainMbKey
 import com.jay.glossy.constants.SoundFxAutoHeadroomKey
+import com.jay.glossy.constants.SoundFxBypassKey
 import com.jay.glossy.constants.SoundFxVirtualizerEnabledKey
 import com.jay.glossy.constants.SoundFxVirtualizerStrengthKey
 import kotlinx.serialization.Serializable
@@ -61,6 +62,7 @@ data class SoundFxSettings(
     val virtualizerEnabled: Boolean = false,
     val virtualizerStrength: Int = 0,
     val autoHeadroomEnabled: Boolean = false,
+    val bypass: Boolean = false,
 ) {
     /**
      * Output gain actually sent to [LoudnessEnhancer]. When auto headroom is on,
@@ -90,6 +92,7 @@ data class SoundFxSettings(
                 virtualizerEnabled = prefs[SoundFxVirtualizerEnabledKey] ?: false,
                 virtualizerStrength = (prefs[SoundFxVirtualizerStrengthKey] ?: 0).coerceIn(0, MAX_EFFECT_STRENGTH),
                 autoHeadroomEnabled = prefs[SoundFxAutoHeadroomKey] ?: false,
+                bypass = prefs[SoundFxBypassKey] ?: false,
             )
     }
 }
@@ -199,6 +202,21 @@ internal fun soundFxToneIndices(
  * Reasonable 5-band layout used by the UI before the device's real
  * capabilities become available (they load as soon as playback starts).
  */
+val GLOSSY_31_BAND_FREQUENCIES_HZ: List<Int> = listOf(
+    20, 25, 31, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500,
+    630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000,
+    10000, 12500, 16000, 20000,
+)
+
+fun glossy31BandCapabilities(presetNames: List<String> = emptyList()): SoundFxCapabilities =
+    SoundFxCapabilities(
+        bandCount = GLOSSY_31_BAND_FREQUENCIES_HZ.size,
+        bandCenterFreqHz = GLOSSY_31_BAND_FREQUENCIES_HZ,
+        minBandLevelMb = -1500,
+        maxBandLevelMb = 1500,
+        presetNames = presetNames,
+    )
+
 fun fallbackSoundFxCapabilities(): SoundFxCapabilities =
     SoundFxCapabilities(
         bandCount = 5,

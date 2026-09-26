@@ -10,6 +10,7 @@ package com.jay.glossy.ui.screens.equalizer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -20,6 +21,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -54,6 +57,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.jay.glossy.ui.player.NativeEngine
+import kotlinx.coroutines.delay
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jay.glossy.LocalPlayerAwareWindowInsets
@@ -80,6 +85,20 @@ fun SoundFxTab(
     val configuration by viewModel.configuration.collectAsStateWithLifecycle()
     val normalizationEnabled by viewModel.normalizationEnabled.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val spectrumEngine = remember { NativeEngine() }
+    var spectrum by remember { mutableStateOf(FloatArray(32)) }
+    var rms by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            spectrum = spectrumEngine.getSpectrum()
+            rms = spectrumEngine.getRms()
+            delay(33)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { spectrumEngine.close() }
+    }
 
     var showSaveDialog by remember { mutableStateOf(false) }
     var profileToExport by remember { mutableStateOf<SoundFxProfile?>(null) }
@@ -118,7 +137,14 @@ fun SoundFxTab(
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                // Master enable
+                item {
+                    SpectrumAnalyzerCard(
+                        levels = spectrum,
+                        rms = rms,
+                    )
+                }
+
+                // Master enable + realtime A/B bypass
                 item {
                     SectionCard {
                         ListItem(
@@ -133,6 +159,24 @@ fun SoundFxTab(
                                 )
                             },
                         )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("A/B Bypass", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    if (config.settings.bypass) "Original audio (DSP bypassed)" else "Glossy DSP active",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            FilledTonalButton(
+                                onClick = { viewModel.setBypass(!config.settings.bypass) },
+                            ) {
+                                Text(if (config.settings.bypass) "A" else "B")
+                            }
+                        }
                     }
                 }
 
@@ -248,7 +292,7 @@ fun SoundFxTab(
                     item {
                         val capabilities = config.capabilities
                         if (capabilities != null && capabilities.bandCount > 0) {
-                            SectionCard(title = stringResource(R.string.equalizer)) {
+                            SectionCard(title = "31-Band EQ") {
                                 val levels = resampleLevels(config.settings.bandLevelsMb, capabilities.bandCount)
                                 levels.forEachIndexed { index, levelMb ->
                                     BandSliderRow(
@@ -474,6 +518,66 @@ fun SoundFxTab(
  * Material You section container: rounded tonal card with an optional
  * Material header (small primary-colored label) above the content.
  */@Composable
+
+@Composable
+private fun SpectrumAnalyzerCard(
+    levels: FloatArray,
+    rms: Float,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = SectionCardShape,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column {
+                    Text("Spectrum Analyzer", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("Realtime frequency response", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(
+                    "RMS ${(rms.coerceIn(0f, 1f) * 100f).toInt()}%",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Canvas(
+                modifier = Modifier.fillMaxWidth().height(150.dp),
+            ) {
+                val count = levels.size.coerceAtLeast(1)
+                val gap = 2.dp.toPx()
+                val barWidth = ((size.width - gap * (count - 1)) / count).coerceAtLeast(1f)
+                levels.forEachIndexed { index, raw ->
+                    val level = raw.coerceIn(0f, 1f)
+                    val h = (size.height * level).coerceAtLeast(2.dp.toPx())
+                    val left = index * (barWidth + gap)
+                    drawRoundRect(
+                        color = MaterialTheme.colorScheme.primary,
+                        topLeft = androidx.compose.ui.geometry.Offset(left, size.height - h),
+                        size = androidx.compose.ui.geometry.Size(barWidth, h),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx(), 3.dp.toPx()),
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("35 Hz", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("1 kHz", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("18 kHz", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
 private fun SectionCard(
     title: String? = null,
     content: @Composable () -> Unit,

@@ -103,68 +103,46 @@ class PlaybackSoundFxController
             synchronized(lock) {
                 val eq = equalizer ?: return null
                 runCatching {
-                    List(eq.numberOfBands.toInt()) { band -> eq.getBandLevel(band.toShort()).toInt() }
+                    val actualCount = eq.numberOfBands.toInt()
+                    val actual = List(actualCount) { band -> eq.getBandLevel(band.toShort()).toInt() }
+                    resampleLevels(actual, GLOSSY_31_BAND_FREQUENCIES_HZ.size)
                 }.getOrNull()
             }
 
         private fun applyInternal(settings: SoundFxSettings) {
-            val eq = equalizer ?: return
-            val capabilities = _capabilities.value
-
-            runCatching { eq.enabled = settings.enabled }
-                .onFailure { Timber.tag(TAG).w(it, "Failed to set equalizer enabled") }
-
-            runCatching {
-                val bandCount = eq.numberOfBands.toInt()
-                val range = eq.bandLevelRange
-                val minMb = range[0].toInt()
-                val maxMb = range[1].toInt()
-                val levels = resampleLevels(settings.bandLevelsMb, bandCount)
-                for (band in 0 until bandCount) {
-                    val target = (levels.getOrNull(band) ?: 0).coerceIn(minMb, maxMb)
-                    eq.setBandLevel(band.toShort(), target.toShort())
-                }
-            }.onFailure { Timber.tag(TAG).w(it, "Failed to set band levels") }
-
+            // Glossy now owns the playback DSP in NativeAudioProcessor. Keeping
+            // Android's session effects enabled here would process the same
+            // signal twice (EQ/bass/virtualizer/gain). We still keep the system
+            // Equalizer attached because its band layout/presets are used as the
+            // UI capability source; the actual audio path stays native.
+            equalizer?.let { eq ->
+                runCatching { eq.enabled = false }
+                    .onFailure { Timber.tag(TAG).w(it, "Failed to disable platform equalizer") }
+            }
             bassBoost?.let { bb ->
-                runCatching {
-                    bb.enabled = settings.enabled && settings.bassBoostEnabled
-                    bb.setStrength(settings.bassBoostStrength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH).toShort())
-                }.onFailure { Timber.tag(TAG).w(it, "Failed to apply bass boost") }
+                runCatching { bb.enabled = false }
+                    .onFailure { Timber.tag(TAG).w(it, "Failed to disable platform bass boost") }
             }
-
             virtualizer?.let { vr ->
-                runCatching {
-                    vr.enabled = settings.enabled && settings.virtualizerEnabled
-                    vr.setStrength(settings.virtualizerStrength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH).toShort())
-                }.onFailure { Timber.tag(TAG).w(it, "Failed to apply virtualizer") }
+                runCatching { vr.enabled = false }
+                    .onFailure { Timber.tag(TAG).w(it, "Failed to disable platform virtualizer") }
+            }
+            loudnessEnhancer?.let { le ->
+                runCatching { le.enabled = false }
+                    .onFailure { Timber.tag(TAG).w(it, "Failed to disable platform loudness enhancer") }
             }
 
-            loudnessEnhancer?.let { le ->
-                runCatching {
-                    val gainMb = settings.effectiveOutputGainMb(capabilities)
-                    le.setTargetGain(gainMb)
-                    le.enabled = settings.enabled && settings.outputGainEnabled && gainMb != 0
-                }.onFailure { Timber.tag(TAG).w(it, "Failed to apply output gain") }
-            }
+            // Preserve stored levels so system-preset import/export remains compatible.
+            // NativeDspController receives the same SoundFxSettings from MusicService.
         }
 
         private fun readCapabilities(eq: Equalizer): SoundFxCapabilities? =
             runCatching {
-                val bandCount = eq.numberOfBands.toInt()
-                val range = eq.bandLevelRange
-                val centerFreqHz = (0 until bandCount).map { band -> eq.getCenterFreq(band.toShort()) / 1000 }
                 val presetNames =
                     (0 until eq.numberOfPresets.toInt()).map { index ->
                         runCatching { eq.getPresetName(index.toShort()) }.getOrDefault("Preset ${index + 1}")
                     }
-                SoundFxCapabilities(
-                    bandCount = bandCount,
-                    bandCenterFreqHz = centerFreqHz,
-                    minBandLevelMb = range[0].toInt(),
-                    maxBandLevelMb = range[1].toInt(),
-                    presetNames = presetNames,
-                )
+                glossy31BandCapabilities(presetNames)
             }.onFailure { Timber.tag(TAG).w(it, "Failed to read equalizer capabilities") }.getOrNull()
 
         private fun releaseInternal() {

@@ -16,6 +16,7 @@ import com.jay.glossy.constants.SoundFxEnabledKey
 import com.jay.glossy.constants.SoundFxOutputGainEnabledKey
 import com.jay.glossy.constants.SoundFxOutputGainMbKey
 import com.jay.glossy.constants.SoundFxAutoHeadroomKey
+import com.jay.glossy.constants.SoundFxBypassKey
 import com.jay.glossy.constants.SoundFxProfilesJsonKey
 import com.jay.glossy.constants.SoundFxSelectedProfileIdKey
 import com.jay.glossy.constants.SoundFxVirtualizerEnabledKey
@@ -85,6 +86,8 @@ class SoundFxRepository
             editManual { it[SoundFxVirtualizerStrengthKey] = strength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH) }
 
         suspend fun setAutoHeadroomEnabled(enabled: Boolean) = editManual { it[SoundFxAutoHeadroomKey] = enabled }
+
+        suspend fun setBypass(enabled: Boolean) = edit { it[SoundFxBypassKey] = enabled }
 
         suspend fun applyProfile(profile: SoundFxProfile) {
             context.safeDataStoreEdit { prefs ->
@@ -176,6 +179,7 @@ class SoundFxRepository
                 prefs[SoundFxVirtualizerStrengthKey] = 0
                 prefs[SoundFxVirtualizerEnabledKey] = false
                 prefs[SoundFxSelectedProfileIdKey] = FLAT_PROFILE_ID
+                prefs[SoundFxBypassKey] = false
             }
         }
 
