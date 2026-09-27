@@ -7,6 +7,7 @@
 #include <oboe/Oboe.h>
 #include <android/log.h>
 #include <algorithm>
+#include <dlfcn.h>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -93,6 +94,50 @@ private:
     std::atomic<size_t> readPos_{0};
 };
 
+namespace {
+using FnAMediaDataSourceClose = void (*)(AMediaDataSource*);
+using FnAMediaDataSourceDelete = void (*)(AMediaDataSource*);
+using FnAMediaDataSourceNewUri = AMediaDataSource* (*)(const char*, int, const char* const*);
+using FnAMediaExtractorSetDataSourceCustom = media_status_t (*)(AMediaExtractor*, AMediaDataSource*);
+
+void* mediaNdkHandle() {
+    static void* handle = []() -> void* {
+        return dlopen("libmediandk.so", RTLD_NOW | RTLD_LOCAL);
+    }();
+    return handle;
+}
+
+template <typename T>
+T mediaNdkSymbol(const char* name) {
+    void* handle = mediaNdkHandle();
+    return handle ? reinterpret_cast<T>(dlsym(handle, name)) : nullptr;
+}
+
+void closeDataSourceCompat(AMediaDataSource* source) {
+    if (!source) return;
+    if (auto fn = mediaNdkSymbol<FnAMediaDataSourceClose>("AMediaDataSource_close")) fn(source);
+}
+
+void deleteDataSourceCompat(AMediaDataSource* source) {
+    if (!source) return;
+    if (auto fn = mediaNdkSymbol<FnAMediaDataSourceDelete>("AMediaDataSource_delete")) fn(source);
+}
+
+AMediaDataSource* newUriDataSourceCompat(const char* uri, int numHeaders, const char* const* headers) {
+    if (auto fn = mediaNdkSymbol<FnAMediaDataSourceNewUri>("AMediaDataSource_newUri")) {
+        return fn(uri, numHeaders, headers);
+    }
+    return nullptr;
+}
+
+media_status_t setDataSourceCustomCompat(AMediaExtractor* extractor, AMediaDataSource* source) {
+    if (auto fn = mediaNdkSymbol<FnAMediaExtractorSetDataSourceCustom>("AMediaExtractor_setDataSourceCustom")) {
+        return fn(extractor, source);
+    }
+    return AMEDIA_ERROR_UNSUPPORTED;
+}
+} // namespace
+
 class Player final : public oboe::AudioStreamDataCallback {
 public:
     Player() : ring_(static_cast<size_t>(kOutputRate) * 6) {}
@@ -140,8 +185,8 @@ public:
         stopRequested_.store(true, std::memory_order_release);
         if (fallback_) fallback_->stop();
         usingFallback_.store(false, std::memory_order_release);
-        if (dataSource_ && __builtin_available(android 29, *)) {
-            AMediaDataSource_close(dataSource_);
+        if (dataSource_ && !dataSourceClosed_) {
+            closeDataSourceCompat(dataSource_);
             dataSourceClosed_ = true;
         }
         if (stream_) stream_->requestStop();
@@ -218,8 +263,8 @@ private:
         if (extractor_) { AMediaExtractor_delete(extractor_); extractor_ = nullptr; }
         if (trackFormat_) { AMediaFormat_delete(trackFormat_); trackFormat_ = nullptr; }
         if (dataSource_) {
-            if (!dataSourceClosed_ && __builtin_available(android 29, *)) AMediaDataSource_close(dataSource_);
-            if (__builtin_available(android 28, *)) AMediaDataSource_delete(dataSource_);
+            if (!dataSourceClosed_) closeDataSourceCompat(dataSource_);
+            deleteDataSourceCompat(dataSource_);
             dataSource_ = nullptr;
         }
         mime_.clear();
@@ -262,7 +307,7 @@ private:
         std::string url;
         { std::lock_guard<std::mutex> lock(stateMutex_); url = url_; }
         media_status_t status = AMEDIA_ERROR_UNSUPPORTED;
-        if (__builtin_available(android 29, *)) {
+        {
             const char* headers[] = {
                 "User-Agent",
                 "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36",
@@ -271,14 +316,14 @@ private:
                 "Connection",
                 "keep-alive"
             };
-            AMediaDataSource* source = AMediaDataSource_newUri(url.c_str(), 3, headers);
+            AMediaDataSource* source = newUriDataSourceCompat(url.c_str(), 3, headers);
             if (source) {
                 dataSource_ = source;
                 dataSourceClosed_ = false;
-                status = AMediaExtractor_setDataSourceCustom(extractor_, source);
+                status = setDataSourceCustomCompat(extractor_, source);
                 if (status != AMEDIA_OK) {
-                    AMediaDataSource_close(source);
-                    AMediaDataSource_delete(source);
+                    closeDataSourceCompat(source);
+                    deleteDataSourceCompat(source);
                     dataSource_ = nullptr;
                 }
             }
