@@ -56,7 +56,7 @@ class PlayerConnection(
     context: Context,
     binder: MusicBinder,
     val database: MusicDatabase,
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
 ) : Player.Listener {
     private companion object {
         private const val TAG = "PlayerConnection"
@@ -67,7 +67,7 @@ class PlayerConnection(
 
     /** Media3 now owns the actual audio clock, so lyrics use the same clock as playback. */
     val realCurrentPosition: Long
-        get() = getPlayerOrNull()?.currentPosition ?: 0L
+        get() = if (service.isGlossyNativeEngine()) service.glossyNativePlayer.position() else getPlayerOrNull()?.currentPosition ?: 0L
 
     private fun getPlayerSafe(): ExoPlayer {
         check(playerReadinessFlow.value) {
@@ -334,6 +334,10 @@ class PlayerConnection(
                 }
             } else {
                 player.togglePlayPause()
+                if (service.isGlossyNativeEngine()) {
+                    if (player.playWhenReady) scope.launch { service.startGlossyNativeForCurrentItem() }
+                    else service.glossyNativePlayer.pause()
+                }
             }
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error in togglePlayPause")
@@ -350,6 +354,7 @@ class PlayerConnection(
                     player.prepare()
                 }
                 player.playWhenReady = true
+                if (service.isGlossyNativeEngine()) scope.launch { service.startGlossyNativeForCurrentItem() }
             }
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error in play")
@@ -363,6 +368,7 @@ class PlayerConnection(
                 castHandler.pause()
             } else {
                 player.playWhenReady = false
+                if (service.isGlossyNativeEngine()) service.glossyNativePlayer.pause()
             }
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error in pause")
@@ -376,6 +382,7 @@ class PlayerConnection(
                 castHandler.seekTo(position)
             } else {
                 player.seekTo(position)
+                if (service.isGlossyNativeEngine()) service.glossyNativePlayer.seekTo(position)
             }
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error in seekTo")
@@ -554,6 +561,9 @@ class PlayerConnection(
         currentMediaItemIndex.value = player.currentMediaItemIndex
         currentWindowIndex.value = player.getCurrentQueueIndex()
         updateCanSkipPreviousAndNext()
+        if (service.isGlossyNativeEngine() && player.playWhenReady) {
+            scope.launch { service.startGlossyNativeForCurrentItem() }
+        }
     }
 
     override fun onTimelineChanged(

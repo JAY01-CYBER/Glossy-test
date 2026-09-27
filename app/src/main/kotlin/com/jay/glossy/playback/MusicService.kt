@@ -28,6 +28,7 @@ import android.media.AudioManager
 import android.media.audiofx.AudioEffect
 import com.jay.glossy.playback.audio.VolumeNormalizationAudioProcessor
 import com.jay.glossy.playback.audio.NativeAudioProcessor
+import com.jay.glossy.ui.player.NativePlayer
 import com.jay.glossy.utils.safeDataStoreEdit
 import android.net.ConnectivityManager
 import android.os.Binder
@@ -105,6 +106,8 @@ import com.jay.glossy.constants.AndroidAutoTargetPlaylistKey
 import com.jay.glossy.constants.AudioNormalizationKey
 import com.jay.glossy.constants.AudioOffload
 import com.jay.glossy.constants.AudioQualityKey
+import com.jay.glossy.constants.AudioEngineMode
+import com.jay.glossy.constants.AudioEngineModeKey
 import com.jay.glossy.constants.CanvasThumbnailAnimationKey
 import com.jay.glossy.constants.AudioTrackPlaybackParamsKey
 import com.jay.glossy.constants.AutoDownloadOnLikeKey
@@ -328,6 +331,10 @@ class MusicService :
 
     private val binder = MusicBinder()
 
+    /** Standalone native decoder/output engine. ExoPlayer remains the session/queue fallback. */
+    val glossyNativePlayer = NativePlayer()
+    @Volatile private var audioEngineMode = AudioEngineMode.EXOPLAYER
+
     inner class MusicBinder : Binder() {
         val service: MusicService
             get() = this@MusicService
@@ -384,8 +391,87 @@ class MusicService :
     private fun applyEffectiveVolume() {
         if (!::player.isInitialized || isCrossfading) return
         val vol = calculateEffectiveVolume()
-        player.volume = vol
+        if (audioEngineMode == AudioEngineMode.GLOSSY_NATIVE) {
+            player.volume = 0f
+            glossyNativePlayer.setVolume(vol)
+        } else {
+            player.volume = vol
+        }
     }
+
+    fun isGlossyNativeEngine(): Boolean = audioEngineMode == AudioEngineMode.GLOSSY_NATIVE
+
+    suspend fun switchAudioEngine(mode: AudioEngineMode) {
+        if (!::player.isInitialized || mode == audioEngineMode) return
+        val position = player.currentPosition.coerceAtLeast(0L)
+        val wasPlaying = player.playWhenReady
+        audioEngineMode = mode
+        glossyNativeMediaPlayer?.let { nativeSessionPlayer ->
+            mediaSession?.player = if (mode == AudioEngineMode.GLOSSY_NATIVE) nativeSessionPlayer else player
+        }
+        if (mode == AudioEngineMode.GLOSSY_NATIVE) {
+            player.volume = 0f
+            val id = player.currentMediaItem?.mediaId
+            if (id != null) {
+                val started = startGlossyNative(id, position)
+                if (started) {
+                    // Native mode owns the audible clock. Keep ExoPlayer stopped so it does not
+                    // decode/buffer the same stream behind the native engine.
+                    player.playWhenReady = false
+                    player.stop()
+                    glossyNativePlayer.setVolume(calculateEffectiveVolume())
+                } else {
+                    Timber.tag(TAG).e("Glossy native engine failed to start after URL refresh retry; reverting to ExoPlayer")
+                    audioEngineMode = AudioEngineMode.EXOPLAYER
+                    player.volume = calculateEffectiveVolume()
+                    safeDataStoreEdit { it[AudioEngineModeKey] = AudioEngineMode.EXOPLAYER.name }
+                }
+            }
+            if (!wasPlaying) glossyNativePlayer.pause()
+        } else {
+            val positionForFallback = glossyNativePlayer.position().coerceAtLeast(0L)
+            glossyNativePlayer.stop()
+            if (player.currentMediaItem != null) {
+                player.seekTo(positionForFallback)
+                player.prepare()
+            }
+            player.volume = calculateEffectiveVolume()
+            player.playWhenReady = wasPlaying
+        }
+    }
+
+    private suspend fun startGlossyNative(mediaId: String, positionMs: Long): Boolean {
+        // Stream URLs can expire or be rejected between resolution and native opening.
+        // Resolve a fresh URL once before giving up so native playback does not fail merely
+        // because the first URL became stale.
+        for (attempt in 0..1) {
+            val url = getStreamUrl(mediaId)
+            if (url != null) {
+                glossyNativePlayer.syncDsp()
+                val started = withContext(Dispatchers.IO) { glossyNativePlayer.playUrl(url, positionMs) }
+                if (started) return true
+            }
+            if (attempt == 0) delay(250)
+        }
+        return false
+    }
+
+    suspend fun startGlossyNativeForCurrentItem() {
+        if (audioEngineMode != AudioEngineMode.GLOSSY_NATIVE || !::player.isInitialized) return
+        val id = player.currentMediaItem?.mediaId ?: return
+        val position = player.currentPosition.coerceAtLeast(0L)
+        val started = startGlossyNative(id, position)
+        if (started) {
+            glossyNativePlayer.setVolume(calculateEffectiveVolume())
+            player.volume = 0f
+        } else {
+            Timber.tag(TAG).e("Glossy native engine failed for current item after URL refresh retry; falling back to ExoPlayer")
+            audioEngineMode = AudioEngineMode.EXOPLAYER
+            player.volume = calculateEffectiveVolume()
+            safeDataStoreEdit { it[AudioEngineModeKey] = AudioEngineMode.EXOPLAYER.name }
+        }
+    }
+
 
     // ========== GLOSSY AUDIO ROUTING LOGIC ==========
     var preferredDeviceId: Int? = null
@@ -437,6 +523,7 @@ class MusicService :
     private var crossfadeJob: Job? = null
     private var isRunning = false
     private var mediaSession: MediaLibrarySession? = null
+    private var glossyNativeMediaPlayer: GlossyNativeMediaPlayer? = null
     private var controllerFuture: com.google.common.util.concurrent.ListenableFuture<MediaController>? = null
 
     private val playerInitialized = MutableStateFlow(false)
@@ -714,7 +801,21 @@ class MusicService :
                     defaultMediaNotificationProvider.notificationChannelInfo
             },
         )
+        audioEngineMode = runBlocking {
+            dataStore.data.map { it[AudioEngineModeKey] ?: AudioEngineMode.EXOPLAYER.name }.first()
+                .let { runCatching { AudioEngineMode.valueOf(it) }.getOrDefault(AudioEngineMode.EXOPLAYER) }
+        }
         player = createExoPlayer(prefs = startupPrefs!!)
+        if (audioEngineMode == AudioEngineMode.GLOSSY_NATIVE) player.volume = 0f
+
+        scope.launch {
+            dataStore.data.map { it[AudioEngineModeKey] ?: AudioEngineMode.EXOPLAYER.name }
+                .distinctUntilChanged()
+                .collectLatest { raw ->
+                    val mode = runCatching { AudioEngineMode.valueOf(raw) }.getOrDefault(AudioEngineMode.EXOPLAYER)
+                    if (mode != audioEngineMode) switchAudioEngine(mode)
+                }
+        }
         player.addListener(this@MusicService)
 
         // Seed the system sound fx (equalizer/bass/virtualizer/output gain) with
@@ -743,9 +844,10 @@ class MusicService :
             toggleLibrary = ::toggleLibrary
             addToTargetPlaylist = ::addToTargetPlaylist
         }
+        glossyNativeMediaPlayer = GlossyNativeMediaPlayer(this, mainLooper, scope)
         mediaSession =
             MediaLibrarySession
-                .Builder(this, player, mediaLibrarySessionCallback)
+                .Builder(this, if (audioEngineMode == AudioEngineMode.GLOSSY_NATIVE) glossyNativeMediaPlayer!! else player, mediaLibrarySessionCallback)
                 .setSessionActivity(
                     PendingIntent.getActivity(
                         this,
@@ -3986,12 +4088,11 @@ class MusicService :
             .setEnableAudioTrackPlaybackParams(useAudioTrackPlaybackParams)
             .setAudioProcessorChain(
                 DefaultAudioSink.DefaultAudioProcessorChain(
-                    arrayOf(
-                        normalizationProcessor,
-                        eqProcessor,
-                        silenceProcessor,
-                        nativeAudioProcessor,
-                    ),
+                    if (audioEngineMode == AudioEngineMode.GLOSSY_NATIVE) {
+                        arrayOf(normalizationProcessor, eqProcessor, silenceProcessor)
+                    } else {
+                        arrayOf(normalizationProcessor, eqProcessor, silenceProcessor, nativeAudioProcessor)
+                    },
                     SilenceSkippingAudioProcessor(2_000_000, 20_000, 256),
                     SonicAudioProcessor(),
                 ),
@@ -4211,6 +4312,7 @@ class MusicService :
         }
 
     override fun onDestroy() {
+        glossyNativePlayer.close()
         isRunning = false
 
         if (!::player.isInitialized) {
@@ -4250,6 +4352,8 @@ class MusicService :
         abandonAudioFocus()
         closeAudioEffectSession()
         mediaLibrarySessionCallback.release()
+        glossyNativeMediaPlayer?.release()
+        glossyNativeMediaPlayer = null
         mediaSession?.release()
         player.removeListener(this)
         sleepTimer?.let { player.removeListener(it) }

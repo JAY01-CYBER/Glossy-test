@@ -21,6 +21,12 @@ import com.jay.glossy.constants.SoundFxProfilesJsonKey
 import com.jay.glossy.constants.SoundFxSelectedProfileIdKey
 import com.jay.glossy.constants.SoundFxVirtualizerEnabledKey
 import com.jay.glossy.constants.SoundFxVirtualizerStrengthKey
+import com.jay.glossy.constants.SoundFxSpatialEnabledKey
+import com.jay.glossy.constants.SoundFxSpatialStrengthKey
+import com.jay.glossy.constants.SoundFxCrossfeedEnabledKey
+import com.jay.glossy.constants.SoundFxCrossfeedStrengthKey
+import com.jay.glossy.constants.SoundFxReverbEnabledKey
+import com.jay.glossy.constants.SoundFxReverbMixKey
 import com.jay.glossy.utils.dataStore
 import com.jay.glossy.utils.safeDataStoreEdit
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -56,7 +62,7 @@ class SoundFxRepository
                     selectedProfileId = prefs[SoundFxSelectedProfileIdKey] ?: FLAT_PROFILE_ID,
                     settings = settings.copy(bandLevelsMb = normalizedLevels),
                     capabilities = capabilities,
-                    profiles = decodeProfiles(prefs[SoundFxProfilesJsonKey]),
+                    profiles = mergeProfiles(decodeProfiles(prefs[SoundFxProfilesJsonKey])),
                 )
             }.flowOn(Dispatchers.IO)
 
@@ -112,6 +118,12 @@ class SoundFxRepository
                     bassBoostEnabled = configuration.settings.bassBoostEnabled,
                     virtualizerStrength = configuration.settings.virtualizerStrength,
                     virtualizerEnabled = configuration.settings.virtualizerEnabled,
+                    spatialEnabled = configuration.settings.spatialEnabled,
+                    spatialStrength = configuration.settings.spatialStrength,
+                    crossfeedEnabled = configuration.settings.crossfeedEnabled,
+                    crossfeedStrength = configuration.settings.crossfeedStrength,
+                    reverbEnabled = configuration.settings.reverbEnabled,
+                    reverbMix = configuration.settings.reverbMix,
                     autoHeadroomEnabled = configuration.settings.autoHeadroomEnabled,
                 )
             context.dataStore.edit { prefs ->
@@ -123,6 +135,7 @@ class SoundFxRepository
         }
 
         suspend fun deleteProfile(profileId: String) {
+            if (profileId.startsWith("builtin_")) return
             context.dataStore.edit { prefs ->
                 val profiles = decodeProfiles(prefs[SoundFxProfilesJsonKey])
                 prefs[SoundFxProfilesJsonKey] = encodeProfiles(profiles.filterNot { it.id == profileId })
@@ -220,8 +233,19 @@ class SoundFxRepository
             prefs[SoundFxBassBoostEnabledKey] = profile.bassBoostEnabled ?: (profile.bassBoostStrength != 0)
             prefs[SoundFxVirtualizerStrengthKey] = profile.virtualizerStrength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH)
             prefs[SoundFxVirtualizerEnabledKey] = profile.virtualizerEnabled ?: (profile.virtualizerStrength != 0)
+            prefs[SoundFxSpatialStrengthKey] = profile.spatialStrength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH)
+            prefs[SoundFxSpatialEnabledKey] = profile.spatialEnabled ?: (profile.spatialStrength != 0)
+            prefs[SoundFxCrossfeedStrengthKey] = profile.crossfeedStrength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH)
+            prefs[SoundFxCrossfeedEnabledKey] = profile.crossfeedEnabled ?: (profile.crossfeedStrength != 0)
+            prefs[SoundFxReverbMixKey] = profile.reverbMix.coerceIn(0, 350)
+            prefs[SoundFxReverbEnabledKey] = profile.reverbEnabled ?: (profile.reverbMix != 0)
             prefs[SoundFxAutoHeadroomKey] = profile.autoHeadroomEnabled
         }
+
+        private fun mergeProfiles(custom: List<SoundFxProfile>): List<SoundFxProfile> =
+            (GLOSSY_BUILT_IN_SOUND_FX + custom.filterNot { it.id.startsWith("builtin_") })
+                .distinctBy(SoundFxProfile::id)
+                .sortedBy { it.name.lowercase() }
 
         private fun decodeProfiles(raw: String?): List<SoundFxProfile> =
             raw

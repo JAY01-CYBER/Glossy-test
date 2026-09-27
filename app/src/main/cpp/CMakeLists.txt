@@ -3,20 +3,21 @@ project("glossy_audio_engine")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(oboe REQUIRED CONFIG)
+find_package(ffmpeg REQUIRED CONFIG)
 
 add_library(glossy_engine SHARED
     glossy_engine.cpp
+    GlossyNativePlayer.cpp
+    AudioDecoder.cpp
 )
 
-target_compile_options(glossy_engine PRIVATE
-    -Wall -Wextra -Wpedantic
-)
+target_include_directories(glossy_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(glossy_engine
     oboe::oboe
+    ffmpeg::ffmpeg
     mediandk
     log
     android

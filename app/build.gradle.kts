@@ -230,7 +230,7 @@ android {
         compose = true
         buildConfig = true
         resValues = true
-        prefab = true // Prefab enabled for Google Oboe
+        prefab = true // Prefab enabled for Google Oboe + FFmpeg
     }
 
     dependenciesInfo {
@@ -444,4 +444,5 @@ dependencies {
     // C++ Audio Engine Dependencies
     // ==========================================
     implementation("com.google.oboe:oboe:1.8.1")
+    implementation(libs.ffmpeg.ssl)
 }

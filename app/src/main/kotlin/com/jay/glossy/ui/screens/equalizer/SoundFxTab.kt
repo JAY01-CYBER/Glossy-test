@@ -517,8 +517,7 @@ fun SoundFxTab(
 /**
  * Material You section container: rounded tonal card with an optional
  * Material header (small primary-colored label) above the content.
- */@Composable
-
+ */
 @Composable
 private fun SpectrumAnalyzerCard(
     levels: FloatArray,
@@ -548,6 +547,7 @@ private fun SpectrumAnalyzerCard(
                 )
             }
             Spacer(Modifier.height(12.dp))
+            val spectrumColor = MaterialTheme.colorScheme.primary
             Canvas(
                 modifier = Modifier.fillMaxWidth().height(150.dp),
             ) {
@@ -559,7 +559,7 @@ private fun SpectrumAnalyzerCard(
                     val h = (size.height * level).coerceAtLeast(2.dp.toPx())
                     val left = index * (barWidth + gap)
                     drawRoundRect(
-                        color = MaterialTheme.colorScheme.primary,
+                        color = spectrumColor,
                         topLeft = androidx.compose.ui.geometry.Offset(left, size.height - h),
                         size = androidx.compose.ui.geometry.Size(barWidth, h),
                         cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx(), 3.dp.toPx()),
@@ -578,6 +578,7 @@ private fun SpectrumAnalyzerCard(
     }
 }
 
+@Composable
 private fun SectionCard(
     title: String? = null,
     content: @Composable () -> Unit,

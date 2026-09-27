@@ -17,6 +17,12 @@ import com.jay.glossy.constants.SoundFxAutoHeadroomKey
 import com.jay.glossy.constants.SoundFxBypassKey
 import com.jay.glossy.constants.SoundFxVirtualizerEnabledKey
 import com.jay.glossy.constants.SoundFxVirtualizerStrengthKey
+import com.jay.glossy.constants.SoundFxSpatialEnabledKey
+import com.jay.glossy.constants.SoundFxSpatialStrengthKey
+import com.jay.glossy.constants.SoundFxCrossfeedEnabledKey
+import com.jay.glossy.constants.SoundFxCrossfeedStrengthKey
+import com.jay.glossy.constants.SoundFxReverbEnabledKey
+import com.jay.glossy.constants.SoundFxReverbMixKey
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlin.math.ceil
@@ -61,6 +67,12 @@ data class SoundFxSettings(
     val bassBoostStrength: Int = 0,
     val virtualizerEnabled: Boolean = false,
     val virtualizerStrength: Int = 0,
+    val spatialEnabled: Boolean = false,
+    val spatialStrength: Int = 0,
+    val crossfeedEnabled: Boolean = false,
+    val crossfeedStrength: Int = 0,
+    val reverbEnabled: Boolean = false,
+    val reverbMix: Int = 0,
     val autoHeadroomEnabled: Boolean = false,
     val bypass: Boolean = false,
 ) {
@@ -91,6 +103,12 @@ data class SoundFxSettings(
                 bassBoostStrength = (prefs[SoundFxBassBoostStrengthKey] ?: 0).coerceIn(0, MAX_EFFECT_STRENGTH),
                 virtualizerEnabled = prefs[SoundFxVirtualizerEnabledKey] ?: false,
                 virtualizerStrength = (prefs[SoundFxVirtualizerStrengthKey] ?: 0).coerceIn(0, MAX_EFFECT_STRENGTH),
+                spatialEnabled = prefs[SoundFxSpatialEnabledKey] ?: false,
+                spatialStrength = (prefs[SoundFxSpatialStrengthKey] ?: 0).coerceIn(0, MAX_EFFECT_STRENGTH),
+                crossfeedEnabled = prefs[SoundFxCrossfeedEnabledKey] ?: false,
+                crossfeedStrength = (prefs[SoundFxCrossfeedStrengthKey] ?: 0).coerceIn(0, MAX_EFFECT_STRENGTH),
+                reverbEnabled = prefs[SoundFxReverbEnabledKey] ?: false,
+                reverbMix = (prefs[SoundFxReverbMixKey] ?: 0).coerceIn(0, 350),
                 autoHeadroomEnabled = prefs[SoundFxAutoHeadroomKey] ?: false,
                 bypass = prefs[SoundFxBypassKey] ?: false,
             )
@@ -113,6 +131,12 @@ data class SoundFxProfile(
     val bassBoostEnabled: Boolean? = null,
     val virtualizerStrength: Int = 0,
     val virtualizerEnabled: Boolean? = null,
+    val spatialStrength: Int = 0,
+    val spatialEnabled: Boolean? = null,
+    val crossfeedStrength: Int = 0,
+    val crossfeedEnabled: Boolean? = null,
+    val reverbMix: Int = 0,
+    val reverbEnabled: Boolean? = null,
     val autoHeadroomEnabled: Boolean = false,
 )
 
@@ -216,6 +240,111 @@ fun glossy31BandCapabilities(presetNames: List<String> = emptyList()): SoundFxCa
         maxBandLevelMb = 1500,
         presetNames = presetNames,
     )
+
+
+
+/**
+ * Glossy built-in Sound FX pack.
+ *
+ * These are intentionally device-agnostic listening presets rather than
+ * headphone correction profiles. Device-specific AutoEQ/RTINGS profiles should
+ * be imported separately when the exact transducer is known.
+ */
+val GLOSSY_BUILT_IN_SOUND_FX: List<SoundFxProfile> = listOf(
+    glossyPreset("balanced", "Glossy Balanced", 0.0, 0.0, 0.0, 0.0),
+    glossyPreset("studio", "Studio Reference", -0.5, 0.0, 0.5, 0.0),
+    glossyPreset("warm", "Warm & Smooth", 2.5, -0.5, -1.0, -0.5),
+    glossyPreset("bright", "Bright & Airy", -0.5, 0.0, 2.5, 0.5),
+    glossyPreset("deep_bass", "Deep Bass", 5.0, -1.0, 1.0, 0.0, bassBoost = 250),
+    glossyPreset("bass_boost", "Bass Boost", 3.5, -0.5, 0.5, 0.0, bassBoost = 450),
+    glossyPreset("sub_bass", "Sub Bass", 5.5, -1.0, 0.5, 0.0, bassBoost = 300),
+    glossyPreset("vocal", "Vocal Focus", -1.0, 0.5, 1.5, 2.5, presenceHz = 2600),
+    glossyPreset("acoustic", "Acoustic", 1.0, 0.5, 1.5, 1.0, presenceHz = 3200),
+    glossyPreset("classical", "Classical", 0.0, 0.0, 1.0, 0.5, presenceHz = 2500),
+    glossyPreset("jazz", "Jazz", 1.0, 0.0, 1.5, 0.5, presenceHz = 2200),
+    glossyPreset("rock", "Rock", 2.0, -1.0, 2.0, 1.0, presenceHz = 1800),
+    glossyPreset("metal", "Metal", 1.5, -1.5, 1.5, 1.5, presenceHz = 3200),
+    glossyPreset("pop", "Pop", 1.5, -0.5, 1.5, 1.5, presenceHz = 2500),
+    glossyPreset("hiphop", "Hip-Hop", 4.0, -1.0, 1.0, 0.5, presenceHz = 2200, bassBoost = 200),
+    glossyPreset("edm", "EDM", 4.5, -1.5, 2.0, 0.5, presenceHz = 3500, bassBoost = 250),
+    glossyPreset("trance", "Trance", 3.5, -1.0, 2.5, 1.0, presenceHz = 4000, bassBoost = 200),
+    glossyPreset("rnb", "R&B", 3.0, 0.0, 1.0, 2.0, presenceHz = 2500, bassBoost = 150),
+    glossyPreset("bollywood", "Bollywood", 2.5, 0.0, 1.5, 2.0, presenceHz = 2800),
+    glossyPreset("lofi", "Lo-Fi", 2.0, -1.0, -2.0, -0.5, presenceHz = 2500),
+    glossyPreset("piano", "Piano", 0.5, 0.5, 1.5, 1.0, presenceHz = 3000),
+    glossyPreset("gaming", "Gaming / Spatial", 1.0, -1.5, 2.0, 2.0, presenceHz = 3500, virtualizer = 250),
+    glossyPreset("movie", "Movie / Cinematic", 2.0, -1.0, 1.5, 1.0, presenceHz = 2200, virtualizer = 180),
+    glossyPreset("night", "Night / Low Volume", 1.5, 0.5, -0.5, 1.0, presenceHz = 2500),
+    glossyPreset("clarity", "Clarity", -1.0, 0.0, 2.0, 2.0, presenceHz = 3200),
+    glossyPreset("party", "Party", 3.0, -1.0, 2.0, 1.0, presenceHz = 3000, bassBoost = 200, virtualizer = 120),
+    glossyPreset("vintage", "Vintage", 2.0, 0.0, -1.5, -0.5, presenceHz = 1800),
+    glossyPreset("spatial_wide", "Spatial Wide", 1.0, 0.0, 1.5, 0.5, presenceHz = 3200, spatial = 600),
+    glossyPreset("spatial_3d", "3D Space", 0.5, 0.0, 1.5, 1.0, presenceHz = 3500, spatial = 800, reverb = 70),
+    glossyPreset("live_stage", "Live Stage", 1.5, -0.5, 1.5, 1.0, presenceHz = 3000, spatial = 700, reverb = 110),
+    glossyPreset("cinema_surround", "Cinema Surround", 2.0, -1.0, 1.0, 1.0, presenceHz = 2500, spatial = 750, reverb = 90),
+    glossyPreset("studio_width", "Studio Width", 0.0, 0.0, 1.0, 0.5, presenceHz = 3000, spatial = 400),
+    glossyPreset("headphone_space", "Headphone Space", 1.0, 0.0, 1.0, 1.0, presenceHz = 2800, spatial = 650, crossfeed = 180),
+    glossyPreset("crossfeed_natural", "Natural Crossfeed", 0.0, 0.0, 0.5, 0.0, crossfeed = 450),
+    glossyPreset("deep_space", "Deep Space", 3.0, -0.5, 1.5, 1.0, presenceHz = 3200, bassBoost = 180, spatial = 700, reverb = 80),
+    glossyPreset("air_space", "Air & Space", -0.5, 0.0, 2.5, 1.0, presenceHz = 5000, spatial = 550, reverb = 45),
+    glossyPreset("gaming_immersive", "Gaming Immersive", 1.0, -1.0, 2.0, 2.0, presenceHz = 3500, virtualizer = 300, spatial = 850, crossfeed = 80),
+    glossyPreset("night_spatial", "Night Spatial", 1.0, 0.5, 0.0, 0.5, presenceHz = 2500, spatial = 350, reverb = 35),
+    glossyPreset("mono_safe_space", "Mono-Safe Space", 0.0, 0.0, 0.5, 0.5, presenceHz = 3000, spatial = 220),
+)
+
+private fun glossyPreset(
+    id: String,
+    name: String,
+    bassDb: Double,
+    midDb: Double,
+    trebleDb: Double,
+    presenceDb: Double,
+    presenceHz: Double = 2800.0,
+    bassBoost: Int = 0,
+    virtualizer: Int = 0,
+    spatial: Int = 0,
+    crossfeed: Int = 0,
+    reverb: Int = 0,
+): SoundFxProfile =
+    SoundFxProfile(
+        id = "builtin_$id",
+        name = name,
+        bandCenterFreqHz = GLOSSY_31_BAND_FREQUENCIES_HZ,
+        bandLevelsMb = glossyCurve(bassDb, midDb, trebleDb, presenceDb, presenceHz),
+        bassBoostStrength = bassBoost,
+        bassBoostEnabled = bassBoost > 0,
+        virtualizerStrength = virtualizer,
+        virtualizerEnabled = virtualizer > 0,
+        spatialStrength = spatial,
+        spatialEnabled = spatial > 0,
+        crossfeedStrength = crossfeed,
+        crossfeedEnabled = crossfeed > 0,
+        reverbMix = reverb,
+        reverbEnabled = reverb > 0,
+        autoHeadroomEnabled = true,
+    )
+
+private fun glossyCurve(
+    bassDb: Double,
+    midDb: Double,
+    trebleDb: Double,
+    presenceDb: Double,
+    presenceHz: Double,
+): List<Int> {
+    fun gaussian(logHz: Double, center: Double, width: Double): Double {
+        val x = (logHz - kotlin.math.log10(center)) / width
+        return kotlin.math.exp(-0.5 * x * x)
+    }
+    return GLOSSY_31_BAND_FREQUENCIES_HZ.map { hz ->
+        val logHz = kotlin.math.log10(hz.toDouble())
+        val bass = bassDb * (1.0 / (1.0 + kotlin.math.exp((logHz - kotlin.math.log10(180.0)) * 7.0)))
+        val treble = trebleDb * (1.0 / (1.0 + kotlin.math.exp(-(logHz - kotlin.math.log10(5000.0)) * 7.0)))
+        val mid = midDb * gaussian(logHz, 900.0, 0.42)
+        val presence = presenceDb * gaussian(logHz, presenceHz, 0.16)
+        ((bass + mid + treble + presence) * 1000.0).toInt().coerceIn(-1500, 1500)
+    }
+}
+
 
 fun fallbackSoundFxCapabilities(): SoundFxCapabilities =
     SoundFxCapabilities(

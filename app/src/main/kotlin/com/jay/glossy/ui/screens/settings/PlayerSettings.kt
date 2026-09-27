@@ -42,6 +42,8 @@ import com.jay.glossy.constants.AudioOffload
 import com.jay.glossy.constants.AudioTrackPlaybackParamsKey
 import com.jay.glossy.constants.AudioQuality
 import com.jay.glossy.constants.AudioQualityKey
+import com.jay.glossy.constants.AudioEngineMode
+import com.jay.glossy.constants.AudioEngineModeKey
 import com.jay.glossy.constants.AutoDownloadOnLikeKey
 import com.jay.glossy.constants.CrossfadeDurationKey
 import com.jay.glossy.constants.CrossfadeEnabledKey
@@ -96,6 +98,10 @@ import com.jay.glossy.ui.utils.getLoudnessLevelLabel
 fun PlayerSettings(
     navController: NavController
 ) {
+    val (audioEngineMode, onAudioEngineModeChange) = rememberEnumPreference(
+        AudioEngineModeKey,
+        defaultValue = AudioEngineMode.EXOPLAYER
+    )
     val (audioQuality, onAudioQualityChange) = rememberEnumPreference(
         AudioQualityKey,
         defaultValue = AudioQuality.AUTO
@@ -224,6 +230,8 @@ fun PlayerSettings(
         defaultValue = 30f
     )
 
+    var showAudioEngineDialog by remember { mutableStateOf(false) }
+
     var showAudioQualityDialog by remember {
         mutableStateOf(false)
     }
@@ -233,6 +241,23 @@ fun PlayerSettings(
     }
 
     if (showAudioQualityDialog) {
+        EnumDialog(
+            onDismiss = { showAudioEngineDialog = false },
+            onSelect = {
+                onAudioEngineModeChange(it)
+                showAudioEngineDialog = false
+            },
+            title = "Audio Engine",
+            current = audioEngineMode,
+            values = AudioEngineMode.values().toList(),
+            valueText = {
+                when (it) {
+                    AudioEngineMode.EXOPLAYER -> "ExoPlayer"
+                    AudioEngineMode.GLOSSY_NATIVE -> "Glossy Audio Engine"
+                }
+            }
+        )
+
         EnumDialog(
             onDismiss = { showAudioQualityDialog = false },
             onSelect = {
@@ -287,6 +312,19 @@ fun PlayerSettings(
         Material3SettingsGroup(
             title = stringResource(R.string.player),
             items = buildList {
+                add(Material3SettingsItem(
+                    icon = painterResource(R.drawable.graphic_eq),
+                    title = { Text("Audio Engine") },
+                    description = {
+                        Text(
+                            when (audioEngineMode) {
+                                AudioEngineMode.EXOPLAYER -> "ExoPlayer"
+                                AudioEngineMode.GLOSSY_NATIVE -> "Glossy Audio Engine"
+                            }
+                        )
+                    },
+                    onClick = { showAudioEngineDialog = true }
+                ))
                 add(Material3SettingsItem(
                     icon = painterResource(R.drawable.graphic_eq),
                     title = { Text(stringResource(R.string.audio_quality)) },

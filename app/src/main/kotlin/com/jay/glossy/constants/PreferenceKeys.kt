@@ -211,6 +211,13 @@ val SoundFxVirtualizerStrengthKey = intPreferencesKey("soundFxVirtualizerStrengt
 val SoundFxAutoHeadroomKey = booleanPreferencesKey("soundFxAutoHeadroom")
 val SoundFxBypassKey = booleanPreferencesKey("soundFxBypass")
 val SoundFxProfilesJsonKey = stringPreferencesKey("soundFxProfilesJson")
+val SoundFxSpatialEnabledKey = booleanPreferencesKey("soundFxSpatialEnabled")
+val SoundFxSpatialStrengthKey = intPreferencesKey("soundFxSpatialStrength")
+val SoundFxCrossfeedEnabledKey = booleanPreferencesKey("soundFxCrossfeedEnabled")
+val SoundFxCrossfeedStrengthKey = intPreferencesKey("soundFxCrossfeedStrength")
+val SoundFxReverbEnabledKey = booleanPreferencesKey("soundFxReverbEnabled")
+val SoundFxReverbMixKey = intPreferencesKey("soundFxReverbMix")
+
 
 val AutoLoadMoreKey = booleanPreferencesKey("autoLoadMore")
 val AutoRadioQueueKey = booleanPreferencesKey("autoRadioQueue")
@@ -861,3 +868,10 @@ enum class AppFont(val value: String, val displayName: String, val description: 
         fun fromValue(value: String): AppFont = entries.find { it.value == value } ?: SYSTEM
     }
 }
+
+enum class AudioEngineMode {
+    EXOPLAYER,
+    GLOSSY_NATIVE,
+}
+
+val AudioEngineModeKey = androidx.datastore.preferences.core.stringPreferencesKey("audioEngineMode")

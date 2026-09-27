@@ -1,194 +1,646 @@
 #include <jni.h>
-#include <media/NdkMediaCodec.h>
-#include <media/NdkMediaExtractor.h>
-#include <media/NdkMediaFormat.h>
-#include <oboe/Oboe.h>
-
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <thread>
 #include <vector>
+#include <mutex>
 
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
 constexpr int kMaxBands = 31;
-constexpr int kMaxChannels = 2;
 constexpr std::array<float, kMaxBands> kBandHz = {
-    20.f,25.f,31.f,40.f,50.f,63.f,80.f,100.f,125.f,160.f,200.f,250.f,315.f,400.f,500.f,630.f,
-    800.f,1000.f,1250.f,1600.f,2000.f,2500.f,3150.f,4000.f,5000.f,6300.f,8000.f,10000.f,12500.f,16000.f,20000.f
+    20.0f, 25.0f, 31.0f, 40.0f, 50.0f, 63.0f, 80.0f, 100.0f, 125.0f, 160.0f,
+    200.0f, 250.0f, 315.0f, 400.0f, 500.0f, 630.0f, 800.0f, 1000.0f,
+    1250.0f, 1600.0f, 2000.0f, 2500.0f, 3150.0f, 4000.0f, 5000.0f, 6300.0f,
+    8000.0f, 10000.0f, 12500.0f, 16000.0f, 20000.0f,
 };
 
 struct Biquad {
-    float b0=1.f,b1=0.f,b2=0.f,a1=0.f,a2=0.f;
-    float x1L=0.f,x2L=0.f,y1L=0.f,y2L=0.f,x1R=0.f,x2R=0.f,y1R=0.f,y2R=0.f;
-    void reset(){x1L=x2L=y1L=y2L=x1R=x2R=y1R=y2R=0.f;}
-    float L(float x){float y=b0*x+b1*x1L+b2*x2L-a1*y1L-a2*y2L;x2L=x1L;x1L=x;y2L=y1L;y1L=y;return y;}
-    float R(float x){float y=b0*x+b1*x1R+b2*x2R-a1*y1R-a2*y2R;x2R=x1R;x1R=x;y2R=y1R;y1R=y;return y;}
-};
+    float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f;
+    float a1 = 0.0f, a2 = 0.0f;
+    float x1L = 0.0f, x2L = 0.0f, y1L = 0.0f, y2L = 0.0f;
+    float x1R = 0.0f, x2R = 0.0f, y1R = 0.0f, y2R = 0.0f;
 
-static void peaking(Biquad& q,float fs,float f,float db,float Q=1.15f){
-    if(fs<=0.f||f>=fs*.49f||std::abs(db)<.001f){q=Biquad{};return;}
-    const float A=std::pow(10.f,db/40.f),w=2.f*kPi*f/fs,c=std::cos(w),s=std::sin(w),alpha=s/(2.f*Q),a0=1.f+alpha/A;
-    q.b0=(1.f+alpha*A)/a0;q.b1=-2.f*c/a0;q.b2=(1.f-alpha*A)/a0;q.a1=-2.f*c/a0;q.a2=(1.f-alpha/A)/a0;
-}
+    void reset() {
+        x1L = x2L = y1L = y2L = 0.0f;
+        x1R = x2R = y1R = y2R = 0.0f;
+    }
 
-static void lowShelf(Biquad& q,float fs,float f,float db){
-    if(fs<=0.f||f>=fs*.49f||std::abs(db)<.001f){q=Biquad{};return;}
-    const float A=std::pow(10.f,db/40.f),w=2.f*kPi*f/fs,c=std::cos(w),s=std::sin(w),alpha=s*.5f,beta=2.f*std::sqrt(A)*alpha,a0=(A+1.f)+(A-1.f)*c+beta;
-    q.b0=A*((A+1.f)-(A-1.f)*c+beta)/a0;q.b1=2.f*A*((A-1.f)-(A+1.f)*c)/a0;q.b2=A*((A+1.f)-(A-1.f)*c-beta)/a0;
-    q.a1=-2.f*((A-1.f)+(A+1.f)*c)/a0;q.a2=((A+1.f)+(A-1.f)*c-beta)/a0;
-}
+    float processL(float x) {
+        const float y = b0 * x + b1 * x1L + b2 * x2L - a1 * y1L - a2 * y2L;
+        x2L = x1L; x1L = x; y2L = y1L; y1L = y;
+        return y;
+    }
 
-struct DspConfig {
-    bool enabled=false,bass=false,virtualizer=false,outputGain=false,headroom=false,bypass=false;
-    int bassStrength=0,virtualizerStrength=0;
-    float outputGainDb=0.f;
-    std::array<float,kMaxBands> bands{};
-    std::array<Biquad,kMaxBands> eq{};
-    Biquad bassFilter{};
-    int sampleRate=48000;
-    void build(int fs){
-        sampleRate=std::max(8000,fs);
-        for(int i=0;i<kMaxBands;++i) peaking(eq[i],float(sampleRate),kBandHz[i],enabled?bands[i]:0.f);
-        lowShelf(bassFilter,float(sampleRate),105.f,enabled&&bass?10.f*float(bassStrength)/1000.f:0.f);
+    float processR(float x) {
+        const float y = b0 * x + b1 * x1R + b2 * x2R - a1 * y1R - a2 * y2R;
+        x2R = x1R; x1R = x; y2R = y1R; y1R = y;
+        return y;
     }
 };
 
-class DspRuntime {
-public:
-    void reset(const DspConfig& c){cfg_=c;for(auto& q:cfg_.eq)q.reset();cfg_.bassFilter.reset();gain_=1.f;}
-    void process(float& l,float& r){
-        if(cfg_.enabled&&!cfg_.bypass){
-            l=cfg_.bassFilter.L(l);r=cfg_.bassFilter.R(r);
-            for(auto& q:cfg_.eq){l=q.L(l);r=q.R(r);}
-            if(cfg_.outputGain){const float g=std::pow(10.f,cfg_.outputGainDb/20.f);l*=g;r*=g;}
-            if(cfg_.virtualizer){const float width=1.f+1.25f*float(cfg_.virtualizerStrength)/1000.f;const float mid=.5f*(l+r),side=.5f*(l-r)*width;l=mid+side;r=mid-side;}
+static void makePeaking(Biquad& q, float fs, float freq, float gainDb, float Q = 1.15f) {
+    if (freq >= fs * 0.49f || std::abs(gainDb) < 0.01f) {
+        q = Biquad{};
+        return;
+    }
+    const float A = std::pow(10.0f, gainDb / 40.0f);
+    const float w = 2.0f * kPi * freq / fs;
+    const float c = std::cos(w);
+    const float s = std::sin(w);
+    const float alpha = s / (2.0f * Q);
+    const float a0 = 1.0f + alpha / A;
+    q.b0 = (1.0f + alpha * A) / a0;
+    q.b1 = (-2.0f * c) / a0;
+    q.b2 = (1.0f - alpha * A) / a0;
+    q.a1 = (-2.0f * c) / a0;
+    q.a2 = (1.0f - alpha / A) / a0;
+}
+
+static void makeLowShelf(Biquad& q, float fs, float freq, float gainDb) {
+    if (freq >= fs * 0.49f || std::abs(gainDb) < 0.01f) {
+        q = Biquad{};
+        return;
+    }
+    const float A = std::pow(10.0f, gainDb / 40.0f);
+    const float w = 2.0f * kPi * freq / fs;
+    const float c = std::cos(w);
+    const float s = std::sin(w);
+    const float alpha = s * 0.5f;
+    const float beta = 2.0f * std::sqrt(A) * alpha;
+    const float a0 = (A + 1.0f) + (A - 1.0f) * c + beta;
+    q.b0 = A * ((A + 1.0f) - (A - 1.0f) * c + beta) / a0;
+    q.b1 = 2.0f * A * ((A - 1.0f) - (A + 1.0f) * c) / a0;
+    q.b2 = A * ((A + 1.0f) - (A - 1.0f) * c - beta) / a0;
+    q.a1 = -2.0f * ((A - 1.0f) + (A + 1.0f) * c) / a0;
+    q.a2 = ((A + 1.0f) + (A - 1.0f) * c - beta) / a0;
+}
+
+struct Reverb {
+    static constexpr int kLines = 4;
+    std::array<std::vector<float>, kLines> buffers;
+    std::array<size_t, kLines> pos{};
+    float mix = 0.0f;
+
+    void configure(int fs) {
+        static constexpr float times[kLines] = {0.0297f, 0.0371f, 0.0411f, 0.0437f};
+        for (int i = 0; i < kLines; ++i) {
+            const size_t n = std::max<size_t>(1, static_cast<size_t>(fs * times[i]));
+            buffers[i].assign(n, 0.0f);
+            pos[i] = 0;
         }
-        const float peak=std::max(std::abs(l),std::abs(r));
-        const float target=peak>.92f?.92f/peak:1.f;
-        const float a=std::exp(-1.f/(std::max(8000,cfg_.sampleRate)*.0015f));
-        const float rel=std::exp(-1.f/(std::max(8000,cfg_.sampleRate)*.06f));
-        gain_=target<gain_?a*gain_+(1.f-a)*target:rel*gain_+(1.f-rel)*target;
-        l=std::clamp(l*gain_,-.999f,.999f);r=std::clamp(r*gain_,-.999f,.999f);
     }
-private:DspConfig cfg_{};float gain_=1.f;
-};
 
-class FloatRing {
-public:
-    explicit FloatRing(size_t capacityFrames=48000*12):data_(nextPow2(capacityFrames)*kMaxChannels),mask_(nextPow2(capacityFrames)-1){}
-    void reset(int channels){channels_=std::clamp(channels,1,kMaxChannels);read_.store(0);write_.store(0);}
-    size_t available()const{return write_.load(std::memory_order_acquire)-read_.load(std::memory_order_acquire);}
-    size_t free()const{return (mask_+1)-std::min(available(),mask_+1);}
-    size_t write(const float*src,size_t frames){if(!src||!frames)return 0;const size_t n=std::min(frames,free());const auto w=write_.load(std::memory_order_relaxed);for(size_t i=0;i<n;++i){auto f=(w+i)&mask_;std::memcpy(&data_[f*channels_],&src[i*channels_],channels_*sizeof(float));}write_.store(w+n,std::memory_order_release);return n;}
-    size_t read(float*dst,size_t frames){if(!dst||!frames)return 0;const size_t n=std::min(frames,available());const auto r=read_.load(std::memory_order_relaxed);for(size_t i=0;i<n;++i){auto f=(r+i)&mask_;std::memcpy(&dst[i*channels_],&data_[f*channels_],channels_*sizeof(float));}read_.store(r+n,std::memory_order_release);return n;}
-private:
-    static size_t nextPow2(size_t n){size_t p=1;while(p<n)p<<=1;return p;}
-    std::vector<float> data_;size_t mask_;int channels_=2;std::atomic<size_t> read_{0},write_{0};
-};
-
-struct Spectrum {
-    static constexpr int N=512,B=32;std::array<float,N> x{};std::array<float,B> level{};int pos=0,filled=0,hop=0,fs=48000;
-    std::array<float,B> read()const{return level;}
-    void reset(int rate){fs=std::max(8000,rate);x.fill(0);level.fill(0);pos=filled=hop=0;}
-    void push(float s){x[pos]=s;pos=(pos+1)%N;filled=std::min(N,filled+1);if(++hop<128||filled<N)return;hop=0;float p=0;std::array<float,N> re{},im{};for(int i=0;i<N;++i){int idx=(pos+i)%N;float w=.5f-.5f*std::cos(2*kPi*i/(N-1));re[i]=x[idx]*w;p+=re[i]*re[i];}for(int i=1,j=0;i<N;++i){int bit=N>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j){std::swap(re[i],re[j]);std::swap(im[i],im[j]);}}for(int len=2;len<=N;len<<=1){float a=-2*kPi/len,wr0=std::cos(a),wi0=std::sin(a);for(int i=0;i<N;i+=len){float wr=1,wi=0;for(int j=0;j<len/2;++j){int u=i+j,v=u+len/2;float vr=re[v]*wr-im[v]*wi,vi=re[v]*wi+im[v]*wr,ur=re[u],ui=im[u];re[u]=ur+vr;im[u]=ui+vi;re[v]=ur-vr;im[v]=ui-vi;float nwr=wr*wr0-wi*wi0;wi=wr*wi0+wi*wr0;wr=nwr;}}}float minHz=35,maxHz=std::min(18000.f,fs*.45f);for(int b=0;b<B;++b){float lo=minHz*std::pow(maxHz/minHz,float(b)/B),hi=minHz*std::pow(maxHz/minHz,float(b+1)/B);int a=std::max(1,int(std::floor(lo*N/fs))),z=std::min(N/2,int(std::ceil(hi*N/fs)));float peak=0;for(int k=a;k<=z;++k)peak=std::max(peak,std::sqrt(re[k]*re[k]+im[k]*im[k])/(N*.5f));level[b]=std::max(peak,level[b]*.78f);}}
-    float rms()const{float p=0;for(float v:x)p+=v*v;return std::sqrt(p/N);}
-};
-
-static Spectrum gSpectrum;
-
-class NativePlayback final:public oboe::AudioStreamDataCallback{
-public:
-    NativePlayback():ring_(48000*12){ring_.reset(2);}
-    ~NativePlayback(){stop();}
-    bool play(const std::string& url){stop();if(url.empty())return false;url_=url;stopRequested_=false;paused_=false;decoderEos_=false;status_=0;worker_=std::thread(&NativePlayback::decodeLoop,this);return true;}
-    void pause(){paused_.store(true);}
-    void resume(){paused_.store(false);}
-    void stop(){stopRequested_.store(true);paused_.store(false);if(worker_.joinable())worker_.join();closeOutput();destroyCodec();destroyExtractor();ring_.reset(2);active_.store(false);decoderEos_.store(false);framesPlayed_.store(0);basePositionUs_.store(0);}
-    void seek(int64_t us){pendingSeekUs_.store(std::max<int64_t>(0,us));}
-    void volume(float v){volume_.store(std::clamp(v,0.f,1.f));}
-    bool active()const{return active_.load();}
-    int64_t position()const{int fs=outputRate_.load();if(fs<=0)return basePositionUs_.load();return basePositionUs_.load()+framesPlayed_.load()*1000000LL/fs;}
-    int status()const{return status_.load();}
-    void setConfig(std::shared_ptr<const DspConfig> c){std::atomic_store_explicit(&config_,std::move(c),std::memory_order_release);configVersion.fetch_add(1,std::memory_order_acq_rel);}
-    oboe::DataCallbackResult onAudioReady(oboe::AudioStream*,void* data,int32_t frames)override{
-        auto*out=static_cast<float*>(data);const int ch=outputChannels_.load();if(!out||ch<1||ch>2)return oboe::DataCallbackResult::Stop;
-        const size_t n=static_cast<size_t>(frames);std::fill(out,out+n*ch,0.f);
-        if(paused_.load())return oboe::DataCallbackResult::Continue;
-        const size_t got=ring_.read(out,n);
-        auto cfg=std::atomic_load_explicit(&config_,std::memory_order_acquire);if(cfg&&cfg->sampleRate!=outputRate_.load()){} // config is rebuilt by decoder on format changes
-        if(cfgVersionSeen_!=configVersion_()){if(cfg){runtime_.reset(*cfg);cfgVersionSeen_=configVersion_();}}
-        const float v=volume_.load(std::memory_order_relaxed);
-        for(size_t i=0;i<got;++i){float l=out[i*ch]*v,r=(ch>1?out[i*ch+1]:l)*v;runtime_.process(l,r);out[i*ch]=l;if(ch>1)out[i*ch+1]=r;}
-        framesPlayed_.fetch_add(static_cast<int64_t>(got));
-        if(gSpectrumEnabled_){for(size_t i=0;i<got;++i)gSpectrum.push(.5f*(out[i*ch]+(ch>1?out[i*ch+1]:out[i*ch])));}
-        if(decoderEos_.load()&&ring_.available()==0)return oboe::DataCallbackResult::Stop;
-        return oboe::DataCallbackResult::Continue;
+    void reset() {
+        for (auto& b : buffers) std::fill(b.begin(), b.end(), 0.0f);
+        pos.fill(0);
     }
-private:
-    uint64_t configVersion_()const{return configVersion.load(std::memory_order_acquire);} 
-    bool setup(){
-        extractor_=AMediaExtractor_new();if(!extractor_)return fail(10);if(AMediaExtractor_setDataSource(extractor_,url_.c_str())!=AMEDIA_OK)return fail(11);
-        ssize_t track=-1;AMediaFormat*fmt=nullptr;for(size_t i=0;i<AMediaExtractor_getTrackCount(extractor_);++i){AMediaFormat*f=AMediaExtractor_getTrackFormat(extractor_,i);const char*m=nullptr;if(f&&AMediaFormat_getString(f,AMEDIAFORMAT_KEY_MIME,&m)&&m&&std::strncmp(m,"audio/",6)==0){track=static_cast<ssize_t>(i);fmt=f;break;}if(f)AMediaFormat_delete(f);}if(track<0||!fmt)return fail(12);
-        if(AMediaExtractor_selectTrack(extractor_,track)!=AMEDIA_OK){AMediaFormat_delete(fmt);return fail(13);}const char*mime=nullptr;if(!AMediaFormat_getString(fmt,AMEDIAFORMAT_KEY_MIME,&mime)||!mime){AMediaFormat_delete(fmt);return fail(14);}
-        codec_=AMediaCodec_createDecoderByType(mime);if(!codec_){AMediaFormat_delete(fmt);return fail(15);}if(AMediaCodec_configure(codec_,fmt,nullptr,nullptr,0)!=AMEDIA_OK){AMediaFormat_delete(fmt);return fail(16);}AMediaFormat_delete(fmt);if(AMediaCodec_start(codec_)!=AMEDIA_OK)return fail(17);
-        int32_t sr=0,ch=2,enc=2;AMediaFormat*outFmt=AMediaCodec_getOutputFormat(codec_);if(outFmt){AMediaFormat_getInt32(outFmt,AMEDIAFORMAT_KEY_SAMPLE_RATE,&sr);AMediaFormat_getInt32(outFmt,AMEDIAFORMAT_KEY_CHANNEL_COUNT,&ch);AMediaFormat_getInt32(outFmt,AMEDIAFORMAT_KEY_PCM_ENCODING,&enc);AMediaFormat_delete(outFmt);}if(sr<=0)sr=48000;if(ch<=0)ch=2;decoderRate_=sr;decoderChannels_=std::clamp(ch,1,8);decoderEncoding_=enc;
-        return openOutput(sr);
-    }
-    bool openOutput(int requestedRate){closeOutput();oboe::AudioStreamBuilder b;b.setDirection(oboe::Direction::Output).setFormat(oboe::AudioFormat::Float).setChannelCount(2).setSampleRate(requestedRate).setPerformanceMode(oboe::PerformanceMode::LowLatency).setSharingMode(oboe::SharingMode::Shared).setDataCallback(this);auto r=b.openStream(stream_);if(r!=oboe::Result::OK||!stream_){b.setPerformanceMode(oboe::PerformanceMode::None);r=b.openStream(stream_);}if(r!=oboe::Result::OK||!stream_)return fail(20);outputRate_.store(stream_->getSampleRate());outputChannels_.store(std::clamp(stream_->getChannelCount(),1,2));ring_.reset(outputChannels_.load());gSpectrum.reset(outputRate_.load());if(stream_->requestStart()!=oboe::Result::OK){closeOutput();return fail(21);}return true;}
-    void decodeLoop(){active_.store(true);if(!setup()){active_.store(false);return;}std::vector<float> in;std::vector<float> converted;bool inputEos=false,outputEos=false;int64_t lastPts=0;
-        while(!stopRequested_.load()&&!outputEos){
-            int64_t seek=pendingSeekUs_.exchange(-1);if(seek>=0){if(!extractor_||!codec_)break;ring_.reset(outputChannels_.load());AMediaCodec_flush(codec_);AMediaExtractor_seekTo(extractor_,seek,AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);framesPlayed_.store(0);basePositionUs_.store(seek);decoderEos_.store(false);inputEos=false;outputEos=false;continue;}
-            if(paused_.load()){std::this_thread::sleep_for(std::chrono::milliseconds(5));continue;}
-            if(!inputEos&&ring_.free()>4096){ssize_t idx=AMediaCodec_dequeueInputBuffer(codec_,5000);if(idx>=0){size_t cap=0;auto*dst=AMediaCodec_getInputBuffer(codec_,idx,&cap);if(!dst||cap==0){status_.store(30);break;}ssize_t size=AMediaExtractor_readSampleData(extractor_,dst,cap);int64_t pts=AMediaExtractor_getSampleTime(extractor_);if(size<0){AMediaCodec_queueInputBuffer(codec_,idx,0,0,static_cast<uint64_t>(std::max<int64_t>(0,pts)),AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);inputEos=true;}else{AMediaCodec_queueInputBuffer(codec_,idx,0,size,static_cast<uint64_t>(std::max<int64_t>(0,pts)),0);AMediaExtractor_advance(extractor_);}}}
-            AMediaCodecBufferInfo info{};ssize_t oi=AMediaCodec_dequeueOutputBuffer(codec_,&info,5000);if(oi==AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED){AMediaFormat*f=AMediaCodec_getOutputFormat(codec_);if(f){int32_t sr=0,ch=2,enc=2;AMediaFormat_getInt32(f,AMEDIAFORMAT_KEY_SAMPLE_RATE,&sr);AMediaFormat_getInt32(f,AMEDIAFORMAT_KEY_CHANNEL_COUNT,&ch);AMediaFormat_getInt32(f,AMEDIAFORMAT_KEY_PCM_ENCODING,&enc);AMediaFormat_delete(f);if(sr>0){decoderRate_=sr;decoderChannels_=std::clamp(int(ch),1,8);decoderEncoding_=enc;}}continue;}if(oi<0)continue;
-            size_t size=0;auto*src=AMediaCodec_getOutputBuffer(codec_,oi,&size);if(src&&info.size>0){const size_t off=std::min<size_t>(info.offset,size),bytes=std::min<size_t>(info.size,size-off);const int ch=decoderChannels_;const bool isFloat=(decoderEncoding_==4);size_t samples=isFloat?bytes/sizeof(float):bytes/sizeof(int16_t);if(ch<=0)samples=0;size_t frames=samples/static_cast<size_t>(ch);in.resize(frames*ch);if(isFloat){auto*p=reinterpret_cast<const float*>(src+off);std::copy(p,p+frames*ch,in.begin());}else{auto*p=reinterpret_cast<const int16_t*>(src+off);for(size_t i=0;i<frames*ch;++i)in[i]=float(p[i])/32768.f;}
-                const int outCh=outputChannels_.load();const int outRate=outputRate_.load();const double ratio=double(outRate)/double(std::max(1,decoderRate_));const size_t outFrames=static_cast<size_t>(std::ceil(frames*ratio));converted.resize(outFrames*outCh);if(frames>0){for(size_t j=0;j<outFrames;++j){double srcPos=double(j)/ratio;size_t i0=std::min(frames-1,static_cast<size_t>(srcPos));size_t i1=std::min(frames-1,i0+1);float t=float(srcPos-double(i0));auto sample=[&](size_t f,int c){return in[f*ch+std::min(c,ch-1)];};float l0=sample(i0,0),r0=ch>1?sample(i0,1):l0,l1=sample(i1,0),r1=ch>1?sample(i1,1):l1;float l=l0+(l1-l0)*t,r=r0+(r1-r0)*t;if(ch>2){l=0;r=0;for(int c=0;c<ch;++c){float s=sample(i0,c);if(c==0)l+=.7071f*s;else if(c==1)r+=.7071f*s;else{l+=.5f*s;r+=.5f*s;}}}converted[j*outCh]=l;if(outCh>1)converted[j*outCh+1]=r;}}
-                size_t written=0;while(written<outFrames&&!stopRequested_.load()){size_t n=ring_.write(converted.data()+written*outCh,outFrames-written);written+=n;if(n==0)std::this_thread::sleep_for(std::chrono::milliseconds(2));}lastPts=info.presentationTimeUs;}
-            AMediaCodec_releaseOutputBuffer(codec_,oi,false);if(info.flags&AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM){outputEos=true;decoderEos_.store(true);}
+
+    float process(float x, float feedback) {
+        if (buffers[0].empty()) return x;
+        float wet = 0.0f;
+        for (int i = 0; i < kLines; ++i) {
+            auto& b = buffers[i];
+            float y = b[pos[i]];
+            b[pos[i]] = x + y * feedback;
+            pos[i] = (pos[i] + 1) % b.size();
+            wet += y;
         }
-        decoderEos_.store(true);active_.store(false);
+        return wet / static_cast<float>(kLines);
     }
-    bool fail(int code){status_.store(code);return false;}
-    void destroyExtractor(){if(extractor_){AMediaExtractor_delete(extractor_);extractor_=nullptr;}}
-    void destroyCodec(){if(codec_){AMediaCodec_stop(codec_);AMediaCodec_delete(codec_);codec_=nullptr;}}
-    void closeOutput(){if(stream_){stream_->requestStop();stream_->close();stream_.reset();}}
-
-    std::string url_;std::thread worker_;std::atomic<bool>stopRequested_{false},paused_{false},active_{false},decoderEos_{false};std::atomic<int64_t>pendingSeekUs_{-1},basePositionUs_{0},framesPlayed_{0};std::atomic<int>outputRate_{48000},outputChannels_{2},status_{0};std::atomic<float>volume_{1.f};
-    AMediaExtractor*extractor_=nullptr;AMediaCodec*codec_=nullptr;int decoderRate_=48000,decoderChannels_=2,decoderEncoding_=2;FloatRing ring_;std::shared_ptr<oboe::AudioStream>stream_;
-    std::shared_ptr<const DspConfig> config_{std::make_shared<DspConfig>()};std::atomic<uint64_t> configVersion{0};uint64_t cfgVersionSeen_=~0ULL;DspRuntime runtime_;bool gSpectrumEnabled_=true;
 };
 
-class DspEngine {public:DspEngine(){auto c=std::make_shared<DspConfig>();c->build(48000);std::shared_ptr<const DspConfig> cc=c;std::atomic_store(&cfg_,cc);}void configure(int fs){auto c=std::make_shared<DspConfig>(*std::atomic_load(&cfg_));c->build(fs);std::shared_ptr<const DspConfig> cc=c;std::atomic_store(&cfg_,cc);}void set(bool enabled,const std::vector<int>& bands,bool bass,int bassS,bool virt,int virtS,bool gain,int gainMb,bool headroom,bool bypass){auto c=std::make_shared<DspConfig>(*std::atomic_load(&cfg_));c->enabled=enabled;c->bass=bass;c->bassStrength=std::clamp(bassS,0,1000);c->virtualizer=virt;c->virtualizerStrength=std::clamp(virtS,0,1000);c->outputGain=gain;c->outputGainDb=float(gainMb)/100.f;c->headroom=headroom;c->bypass=bypass;c->bands.fill(0);if(!bands.empty())for(int i=0;i<kMaxBands;++i){float x=float(i)*(bands.size()-1)/float(kMaxBands-1);int lo=std::clamp(int(std::floor(x)),0,int(bands.size())-1),hi=std::min(lo+1,int(bands.size())-1);float t=x-lo;c->bands[i]=(bands[lo]*(1-t)+bands[hi]*t)/100.f;}c->build(c->sampleRate);std::shared_ptr<const DspConfig> cc=c;std::atomic_store(&cfg_,cc);}std::shared_ptr<const DspConfig>cfg()const{return std::atomic_load(&cfg_);}private:std::shared_ptr<const DspConfig>cfg_;};
 
-static DspEngine* dsp(jlong h){return reinterpret_cast<DspEngine*>(h);}static NativePlayback* playback(jlong h){return reinterpret_cast<NativePlayback*>(h);}
+
+struct Spatializer {
+    static constexpr int kDelaySize = 4096;
+    std::vector<float> left{kDelaySize, 0.0f}, right{kDelaySize, 0.0f};
+    int pos = 0;
+    std::atomic<bool> enabled{false};
+    float strength = 0.0f;
+    float azimuth = 0.0f;
+    float elevation = 0.0f;
+    void configure() { left.assign(kDelaySize, 0.0f); right.assign(kDelaySize, 0.0f); pos = 0; }
+    void reset() { std::fill(left.begin(), left.end(), 0.0f); std::fill(right.begin(), right.end(), 0.0f); pos = 0; }
+    void set(bool en, float s, float a, float e) { enabled.store(en); strength = std::clamp(s,0.0f,1.0f); azimuth = std::clamp(a,-1.5707963f,1.5707963f); elevation = std::clamp(e,-1.5707963f,1.5707963f); }
+    float delayed(const std::vector<float>& b, float d) const {
+        float r = static_cast<float>(pos) - d; while (r < 0) r += kDelaySize; while (r >= kDelaySize) r -= kDelaySize;
+        int i = static_cast<int>(r), j=(i+1)%kDelaySize; float f=r-i; return b[i]*(1-f)+b[j]*f;
+    }
+    void process(float& l, float& r, int fs) {
+        if (!enabled.load() || strength <= 0.001f) return;
+        left[pos]=l; right[pos]=r;
+        const float a=std::abs(azimuth), itd=(0.0875f/343.0f)*(std::sin(a)+a)*fs*strength;
+        const float dl=azimuth>0?itd:0, dr=azimuth<0?itd:0;
+        const float shadow=1.0f-0.6f*std::sin(a)*strength;
+        const float elev=0.72f+0.28f*std::cos(elevation);
+        l=delayed(left,dl)*((azimuth>0?shadow:1.0f)*elev);
+        r=delayed(right,dr)*((azimuth<0?shadow:1.0f)*elev);
+        const float mid=(l+r)*0.5f, side=(l-r)*0.5f;
+        const float width=1.0f+0.45f*strength;
+        l=mid+side*width; r=mid-side*width;
+        pos=(pos+1)%kDelaySize;
+    }
+};
+
+struct Crossfeed {
+    static constexpr int kDelaySize=512;
+    std::vector<float> l{kDelaySize,0.0f}, r{kDelaySize,0.0f};
+    int pos=0; float lpL=0,lpR=0;
+    std::atomic<bool> enabled{false}; float strength=0.0f;
+    void set(bool en,float s){enabled.store(en);strength=std::clamp(s,0.0f,1.0f);}
+    void reset(){std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);pos=0;lpL=lpR=0;}
+    void process(float& leftIn,float& rightIn,int fs){
+        if(!enabled.load()||strength<=0.001f)return;
+        l[pos]=leftIn;r[pos]=rightIn; const float d=0.0003f*fs; float ri=pos-d; while(ri<0)ri+=kDelaySize; int i=(int)ri,j=(i+1)%kDelaySize;float f=ri-i;
+        float dl=l[i]*(1-f)+l[j]*f, dr=r[i]*(1-f)+r[j]*f; const float a=std::exp(-2.0f*3.14159265f*700.0f/fs);
+        lpL=(1-a)*dl+a*lpL;lpR=(1-a)*dr+a*lpR; float s=strength; leftIn=leftIn*(1-0.5f*s)+lpR*s; rightIn=rightIn*(1-0.5f*s)+lpL*s; pos=(pos+1)%kDelaySize;
+    }
+};
+
+struct ReverbFx {
+    std::array<std::vector<float>,4> buf; std::array<size_t,4> pos{}; std::atomic<bool> enabled{false}; float mix=0, feedback=0.55f;
+    void configure(int fs){const float t[4]={0.0297f,0.0371f,0.0411f,0.0437f};for(int i=0;i<4;i++){buf[i].assign(std::max<size_t>(1,(size_t)(fs*t[i])),0);pos[i]=0;}}
+    void reset(){for(auto&b:buf)std::fill(b.begin(),b.end(),0);pos.fill(0);}
+    void set(bool en,float m){enabled.store(en);mix=std::clamp(m,0.0f,0.35f);}
+    float processOne(float x, int channel){if(!enabled.load()||mix<=0.001f||buf[0].empty())return x;float wet=0;for(int i=0;i<4;i++){auto&b=buf[i];size_t p=(pos[i]+static_cast<size_t>(channel*17))%b.size();float y=b[p];b[p]=x+y*feedback;wet+=y;}return x*(1-mix)+wet*mix/4.0f;}
+    void processStereo(float& l,float& r){if(!enabled.load()||mix<=0.001f||buf[0].empty())return;for(int i=0;i<4;i++){auto&b=buf[i];float yl=b[pos[i]], yr=b[(pos[i]+17)%b.size()];b[pos[i]]=l+yl*feedback;b[(pos[i]+17)%b.size()]=r+yr*feedback;l=l*(1-mix)+yl*mix/4.0f;r=r*(1-mix)+yr*mix/4.0f;pos[i]=(pos[i]+1)%b.size();}}
+};
+
+struct SpectrumAnalyzer {
+    static constexpr int kFftSize = 512;
+    static constexpr int kBins = 32;
+    std::array<float, kFftSize> ring{};
+    int write = 0;
+    int filled = 0;
+    std::array<float, kFftSize> real{};
+    std::array<float, kFftSize> imag{};
+    std::array<float, kBins> windowed{};
+    std::array<std::atomic<float>, kBins> levels{};
+    std::atomic<float> rms{0.0f};
+    int sampleRate = 48000;
+    int hop = 0;
+
+    SpectrumAnalyzer() {
+        for (auto& v : levels) v.store(0.0f, std::memory_order_relaxed);
+    }
+
+    void configure(int fs) {
+        sampleRate = std::max(8000, fs);
+        reset();
+    }
+
+    void reset() {
+        ring.fill(0.0f);
+        real.fill(0.0f);
+        imag.fill(0.0f);
+        write = filled = hop = 0;
+        rms.store(0.0f, std::memory_order_relaxed);
+        for (auto& v : levels) v.store(0.0f, std::memory_order_relaxed);
+    }
+
+    static void fft(std::array<float, kFftSize>& re, std::array<float, kFftSize>& im) {
+        for (int i = 1, j = 0; i < kFftSize; ++i) {
+            int bit = kFftSize >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) {
+                std::swap(re[i], re[j]);
+                std::swap(im[i], im[j]);
+            }
+        }
+        for (int len = 2; len <= kFftSize; len <<= 1) {
+            const float angle = -2.0f * kPi / static_cast<float>(len);
+            const float wLenR = std::cos(angle);
+            const float wLenI = std::sin(angle);
+            for (int i = 0; i < kFftSize; i += len) {
+                float wr = 1.0f, wi = 0.0f;
+                const int half = len >> 1;
+                for (int j = 0; j < half; ++j) {
+                    const int u = i + j;
+                    const int v = u + half;
+                    const float vr = re[v] * wr - im[v] * wi;
+                    const float vi = re[v] * wi + im[v] * wr;
+                    const float ur = re[u], ui = im[u];
+                    re[u] = ur + vr; im[u] = ui + vi;
+                    re[v] = ur - vr; im[v] = ui - vi;
+                    const float nwr = wr * wLenR - wi * wLenI;
+                    wi = wr * wLenI + wi * wLenR;
+                    wr = nwr;
+                }
+            }
+        }
+    }
+
+    void publish() {
+        float power = 0.0f;
+        for (int i = 0; i < kFftSize; ++i) {
+            const int idx = (write + i) % kFftSize;
+            const float w = 0.5f - 0.5f * std::cos(2.0f * kPi * i / (kFftSize - 1));
+            real[i] = ring[idx] * w;
+            imag[i] = 0.0f;
+            power += real[i] * real[i];
+        }
+        fft(real, imag);
+        rms.store(std::sqrt(power / static_cast<float>(kFftSize)), std::memory_order_relaxed);
+
+        const float minHz = 35.0f;
+        const float maxHz = std::min(18000.0f, sampleRate * 0.45f);
+        for (int b = 0; b < kBins; ++b) {
+            const float lo = minHz * std::pow(maxHz / minHz, static_cast<float>(b) / kBins);
+            const float hi = minHz * std::pow(maxHz / minHz, static_cast<float>(b + 1) / kBins);
+            const int loBin = std::max(1, static_cast<int>(std::floor(lo * kFftSize / sampleRate)));
+            const int hiBin = std::min(kFftSize / 2, static_cast<int>(std::ceil(hi * kFftSize / sampleRate)));
+            float peak = 0.0f;
+            for (int k = loBin; k <= hiBin; ++k) {
+                const float mag = std::sqrt(real[k] * real[k] + imag[k] * imag[k]) / (kFftSize * 0.5f);
+                peak = std::max(peak, mag);
+            }
+            // Smooth on the UI-facing side to avoid jitter without locking the audio thread.
+            const float previous = levels[b].load(std::memory_order_relaxed);
+            const float smoothed = std::max(peak, previous * 0.78f);
+            levels[b].store(std::clamp(smoothed, 0.0f, 1.0f), std::memory_order_relaxed);
+        }
+    }
+
+    void push(float sample) {
+        ring[write] = sample;
+        write = (write + 1) % kFftSize;
+        filled = std::min(kFftSize, filled + 1);
+        if (++hop >= 128 && filled == kFftSize) {
+            hop = 0;
+            publish();
+        }
+    }
+
+    void read(float* out, int n) const {
+        if (!out || n <= 0) return;
+        const int count = std::min(n, kBins);
+        for (int i = 0; i < count; ++i) out[i] = levels[i].load(std::memory_order_relaxed);
+        for (int i = count; i < n; ++i) out[i] = 0.0f;
+    }
+};
+
+static SpectrumAnalyzer gSpectrum;
+
+struct Engine {
+    int sampleRate = 0;
+    int channels = 0;
+    int encoding = 0;
+    bool enabled = false;
+    bool bassEnabled = false;
+    bool virtualizerEnabled = false;
+    bool outputGainEnabled = false;
+    bool autoHeadroom = false;
+    bool bypass = false;
+    int bassStrength = 0;
+    int virtualizerStrength = 0;
+    float outputGainDb = 0.0f;
+    std::array<float, kMaxBands> bandGainDb{};
+    std::array<Biquad, kMaxBands> eq{};
+    Biquad bass;
+    float limiterGain = 1.0f;
+    float compressorEnvelope = 0.0f;
+    Reverb reverb;
+    Spatializer spatializer;
+    Crossfeed crossfeed;
+    ReverbFx spatialReverb;
+    bool spatialEnabled = false;
+    int spatialStrength = 0;
+    bool crossfeedEnabled = false;
+    int crossfeedStrength = 0;
+    bool reverbEnabled = false;
+    int reverbMix = 0;
+
+    void configure(int fs, int ch, int enc) {
+        sampleRate = fs;
+        gSpectrum.configure(fs);
+        channels = ch;
+        encoding = enc;
+        rebuild();
+    }
+
+    void setDsp(bool en, const std::vector<int>& bands, bool bassEn, int bassS,
+               bool virtEn, int virtS, bool gainEn, int gainMb, bool headroom) {
+        enabled = en;
+        bassEnabled = bassEn;
+        bassStrength = std::clamp(bassS, 0, 1000);
+        virtualizerEnabled = virtEn;
+        virtualizerStrength = std::clamp(virtS, 0, 1000);
+        outputGainEnabled = gainEn;
+        outputGainDb = static_cast<float>(gainMb) / 100.0f;
+        autoHeadroom = headroom;
+        bandGainDb.fill(0.0f);
+
+        if (!bands.empty()) {
+            for (int i = 0; i < kMaxBands; ++i) {
+                const float x = static_cast<float>(i) * (bands.size() - 1) / static_cast<float>(kMaxBands - 1);
+                const int lo = std::clamp(static_cast<int>(std::floor(x)), 0, static_cast<int>(bands.size()) - 1);
+                const int hi = std::clamp(lo + 1, 0, static_cast<int>(bands.size()) - 1);
+                const float t = x - static_cast<float>(lo);
+                bandGainDb[i] = (static_cast<float>(bands[lo]) * (1.0f - t) + static_cast<float>(bands[hi]) * t) / 100.0f;
+            }
+        }
+        rebuild();
+    }
+
+    void setEffects(bool spatialEn, int spatialS, bool crossEn, int crossS, bool reverbEn, int reverbS) {
+        spatialEnabled=spatialEn; spatialStrength=std::clamp(spatialS,0,1000);
+        crossfeedEnabled=crossEn; crossfeedStrength=std::clamp(crossS,0,1000);
+        reverbEnabled=reverbEn; reverbMix=std::clamp(reverbS,0,350);
+        spatializer.set(spatialEn, spatialStrength/1000.0f, 0.0f, 0.0f);
+        crossfeed.set(crossEn, crossfeedStrength/1000.0f);
+        spatialReverb.set(reverbEn, reverbMix/1000.0f);
+    }
+
+    void rebuild() {
+        if (sampleRate <= 0) return;
+        for (int i = 0; i < kMaxBands; ++i) {
+            makePeaking(eq[i], static_cast<float>(sampleRate), kBandHz[i], enabled ? bandGainDb[i] : 0.0f);
+        }
+        const float bassDb = enabled && bassEnabled ? 10.0f * static_cast<float>(bassStrength) / 1000.0f : 0.0f;
+        makeLowShelf(bass, static_cast<float>(sampleRate), 105.0f, bassDb);
+        reverb.configure(sampleRate);
+        spatializer.configure();
+        spatialReverb.configure(sampleRate);
+        resetState();
+    }
+
+    void resetState() {
+        for (auto& f : eq) f.reset();
+        bass.reset();
+        reverb.reset();
+        spatializer.reset();
+        crossfeed.reset();
+        spatialReverb.reset();
+        limiterGain = 1.0f;
+        compressorEnvelope = 0.0f;
+    }
+
+    float processSample(float x, int ch, float& other) {
+        if (!enabled) return x;
+        if (ch == 0) {
+            x = bass.processL(x);
+            for (auto& f : eq) x = f.processL(x);
+        } else {
+            x = bass.processR(x);
+            for (auto& f : eq) x = f.processR(x);
+        }
+        const float gainDb = outputGainEnabled ? outputGainDb : 0.0f;
+        x *= std::pow(10.0f, gainDb / 20.0f);
+        return x;
+    }
+
+    void processStereo(float& l, float& r) {
+        if (!enabled) return;
+        l = processSample(l, 0, r);
+        r = processSample(r, 1, l);
+
+        if (virtualizerEnabled) {
+            const float width = 1.0f + 1.25f * static_cast<float>(virtualizerStrength) / 1000.0f;
+            const float mid = 0.5f * (l + r);
+            const float side = 0.5f * (l - r) * width;
+            l = mid + side; r = mid - side;
+        }
+        if (crossfeedEnabled) crossfeed.process(l, r, sampleRate);
+        if (spatialEnabled) spatializer.process(l, r, sampleRate);
+        if (reverbEnabled) spatialReverb.processStereo(l, r);
+
+        // Small safety compressor followed by a peak limiter. This prevents EQ/boost
+        // combinations from turning into hard PCM clipping.
+        const float peak = std::max(std::abs(l), std::abs(r));
+        const float threshold = 0.92f;
+        float target = 1.0f;
+        if (peak > threshold) target = threshold / peak;
+        const float attack = std::exp(-1.0f / (static_cast<float>(sampleRate) * 0.002f));
+        const float release = std::exp(-1.0f / (static_cast<float>(sampleRate) * 0.080f));
+        if (target < limiterGain) limiterGain = attack * limiterGain + (1.0f - attack) * target;
+        else limiterGain = release * limiterGain + (1.0f - release) * target;
+        l *= limiterGain;
+        r *= limiterGain;
+        l = std::clamp(l, -0.999f, 0.999f);
+        r = std::clamp(r, -0.999f, 0.999f);
+    }
+};
+
+inline int bytesPerSample(int encoding) {
+    switch (encoding) {
+        case 2: return 2;
+        case 4: return 4;
+        case 0x10000000: return 3;
+        case 0x20000000: return 4;
+        default: return 0;
+    }
+}
+
+inline Engine* fromHandle(jlong handle) {
+    return reinterpret_cast<Engine*>(handle);
+}
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_jay_glossy_ui_player_NativeEngine_nCreate(JNIEnv*, jobject) {
+    return reinterpret_cast<jlong>(new Engine());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_jay_glossy_ui_player_NativeEngine_nConfigure(JNIEnv*, jobject, jlong handle,
+                                                       jint sampleRate, jint channels, jint encoding) {
+    auto* e = fromHandle(handle);
+    if (!e || sampleRate <= 0 || channels <= 0 || channels > 2 || bytesPerSample(encoding) == 0) return JNI_FALSE;
+    e->configure(sampleRate, channels, encoding);
+    return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_jay_glossy_ui_player_NativeEngine_nSetDsp(JNIEnv* env, jobject, jlong handle,
+                                                    jboolean enabled, jintArray bandsMb,
+                                                    jboolean bassEnabled, jint bassStrength,
+                                                    jboolean virtualizerEnabled, jint virtualizerStrength,
+                                                    jboolean spatialEnabled, jint spatialStrength,
+                                                    jboolean crossfeedEnabled, jint crossfeedStrength,
+                                                    jboolean reverbEnabled, jint reverbMix,
+                                                    jboolean outputGainEnabled, jint outputGainMb,
+                                                    jboolean autoHeadroom, jboolean bypass) {
+    auto* e = fromHandle(handle);
+    if (!e) return;
+    std::vector<int> bands;
+    if (bandsMb) {
+        const jsize n = env->GetArrayLength(bandsMb);
+        bands.resize(static_cast<size_t>(n));
+        if (n > 0) env->GetIntArrayRegion(bandsMb, 0, n, bands.data());
+    }
+    e->setDsp(enabled == JNI_TRUE, bands, bassEnabled == JNI_TRUE, bassStrength,
+              virtualizerEnabled == JNI_TRUE, virtualizerStrength,
+              outputGainEnabled == JNI_TRUE, outputGainMb, autoHeadroom == JNI_TRUE);
+    e->bypass = bypass == JNI_TRUE;
+    e->setEffects(spatialEnabled == JNI_TRUE, spatialStrength, crossfeedEnabled == JNI_TRUE, crossfeedStrength, reverbEnabled == JNI_TRUE, reverbMix);
+}
+
+
+static int processEngine(Engine* e, const void* input, void* output, int bytes) {
+    auto* in = static_cast<const uint8_t*>(input);
+    auto* out = static_cast<uint8_t*>(output);
+    if (!e || !in || !out || bytes <= 0) return 0;
+    // Feed the analyzer from the decoded PCM before DSP so the visualization
+    // represents the source signal rather than post-limiter output.
+    if (e->encoding == 2) {
+        const int samples = bytes / 2;
+        const auto* src = reinterpret_cast<const int16_t*>(in);
+        if (e->channels == 2) {
+            for (int i = 0; i + 1 < samples; i += 2) {
+                gSpectrum.push(0.5f * (static_cast<float>(src[i]) + static_cast<float>(src[i + 1])) / 32768.0f);
+            }
+        } else {
+            for (int i = 0; i < samples; ++i) gSpectrum.push(static_cast<float>(src[i]) / 32768.0f);
+        }
+    } else if (e->encoding == 4) {
+        const int samples = bytes / 4;
+        const auto* src = reinterpret_cast<const float*>(in);
+        if (e->channels == 2) {
+            for (int i = 0; i + 1 < samples; i += 2) gSpectrum.push(0.5f * (src[i] + src[i + 1]));
+        } else {
+            for (int i = 0; i < samples; ++i) gSpectrum.push(src[i]);
+        }
+    }
+
+    if (!e->enabled || e->bypass) {
+        std::memcpy(out, in, static_cast<size_t>(bytes));
+        return bytes;
+    }
+
+    if (e->encoding == 2) {
+        const int samples = bytes / 2;
+        const auto* src = reinterpret_cast<const int16_t*>(in);
+        auto* dst = reinterpret_cast<int16_t*>(out);
+        if (e->channels == 2) {
+            for (int i = 0; i + 1 < samples; i += 2) {
+                float l = static_cast<float>(src[i]) / 32768.0f;
+                float r = static_cast<float>(src[i + 1]) / 32768.0f;
+                e->processStereo(l, r);
+                dst[i] = static_cast<int16_t>(std::lrintf(l * 32767.0f));
+                dst[i + 1] = static_cast<int16_t>(std::lrintf(r * 32767.0f));
+            }
+        } else {
+            for (int i = 0; i < samples; ++i) {
+                float l = static_cast<float>(src[i]) / 32768.0f;
+                float r = l;
+                e->processStereo(l, r);
+                dst[i] = static_cast<int16_t>(std::lrintf(l * 32767.0f));
+            }
+        }
+        return samples * 2;
+    }
+
+    if (e->encoding == 4) {
+        const int samples = bytes / 4;
+        const auto* src = reinterpret_cast<const float*>(in);
+        auto* dst = reinterpret_cast<float*>(out);
+        if (e->channels == 2) {
+            for (int i = 0; i + 1 < samples; i += 2) {
+                float l = src[i], r = src[i + 1];
+                e->processStereo(l, r);
+                dst[i] = l;
+                dst[i + 1] = r;
+            }
+        } else {
+            for (int i = 0; i < samples; ++i) {
+                float l = src[i], r = l;
+                e->processStereo(l, r);
+                dst[i] = l;
+            }
+        }
+        return samples * 4;
+    }
+
+    std::memcpy(out, in, static_cast<size_t>(bytes));
+    return bytes;
 
 }
 
-extern "C" JNIEXPORT jlong JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nCreate(JNIEnv*,jobject){return reinterpret_cast<jlong>(new DspEngine());}
-extern "C" JNIEXPORT jboolean JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nConfigure(JNIEnv*,jobject,jlong h,jint sr,jint,jint){auto*d=dsp(h);if(!d||sr<=0)return JNI_FALSE;d->configure(sr);return JNI_TRUE;}
-extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nSetDsp(JNIEnv*e,jobject,jlong h,jboolean en,jintArray a,jboolean be,jint bs,jboolean ve,jint vs,jboolean ge,jint gm,jboolean ah,jboolean bp){auto*d=dsp(h);if(!d)return;std::vector<int>b;if(a){jsize n=e->GetArrayLength(a);b.resize(n);if(n)e->GetIntArrayRegion(a,0,n,b.data());}d->set(en,b,be,bs,ve,vs,ge,gm,ah,bp);}
-extern "C" JNIEXPORT jfloatArray JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nGetSpectrum(JNIEnv*e,jobject){jfloatArray a=e->NewFloatArray(Spectrum::B);if(!a)return nullptr;std::array<float,Spectrum::B>v{};for(int i=0;i<Spectrum::B;++i)v[i]=gSpectrum.level[i];e->SetFloatArrayRegion(a,0,Spectrum::B,v.data());return a;}
-extern "C" JNIEXPORT jfloat JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nGetRms(JNIEnv*,jobject){return gSpectrum.rms();}
-extern "C" JNIEXPORT jlong JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nCreatePlayback(JNIEnv*,jobject){return reinterpret_cast<jlong>(new NativePlayback());}
-extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nApplyPlaybackDsp(JNIEnv*,jobject,jlong ph,jlong dh){auto*p=playback(ph);auto*d=dsp(dh);if(p&&d)p->setConfig(d->cfg());}
-extern "C" JNIEXPORT jboolean JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nPlayUrl(JNIEnv*e,jobject,jlong h,jstring u){auto*p=playback(h);if(!p||!u)return JNI_FALSE;const char*s=e->GetStringUTFChars(u,nullptr);if(!s)return JNI_FALSE;bool ok=p->play(s);e->ReleaseStringUTFChars(u,s);return ok?JNI_TRUE:JNI_FALSE;}
-extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nPausePlayback(JNIEnv*,jobject,jlong h){if(auto*p=playback(h))p->pause();}
-extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nResumePlayback(JNIEnv*,jobject,jlong h){if(auto*p=playback(h))p->resume();}
-extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nStopPlayback(JNIEnv*,jobject,jlong h){if(auto*p=playback(h))p->stop();}
-extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nSeekPlayback(JNIEnv*,jobject,jlong h,jlong us){if(auto*p=playback(h))p->seek(us);}
-extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nSetPlaybackVolume(JNIEnv*,jobject,jlong h,jfloat v){if(auto*p=playback(h))p->volume(v);}
-extern "C" JNIEXPORT jlong JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nGetPlaybackPosition(JNIEnv*,jobject,jlong h){if(auto*p=playback(h))return p->position();return 0;}
-extern "C" JNIEXPORT jboolean JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nIsPlaybackActive(JNIEnv*,jobject,jlong h){if(auto*p=playback(h))return p->active()?JNI_TRUE:JNI_FALSE;return JNI_FALSE;}
-extern "C" JNIEXPORT jint JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nGetPlaybackStatus(JNIEnv*,jobject,jlong h){if(auto*p=playback(h))return p->status();return -1;}
-extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nReleasePlayback(JNIEnv*,jobject,jlong h){delete playback(h);}
-extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nReset(JNIEnv*,jobject,jlong){}
-extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativeEngine_nRelease(JNIEnv*,jobject,jlong h){delete dsp(h);}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_jay_glossy_ui_player_NativeEngine_nProcess(JNIEnv* env, jobject, jlong handle,
+                                                     jobject input, jobject output, jint bytes) {
+    auto* e = fromHandle(handle);
+    if (!e || !input || !output || bytes <= 0) return 0;
+    auto* in = env->GetDirectBufferAddress(input);
+    auto* out = env->GetDirectBufferAddress(output);
+    const jlong capacity = env->GetDirectBufferCapacity(output);
+    if (!in || !out || capacity < bytes) return 0;
+    return processEngine(e, in, out, bytes);
+}
+
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_jay_glossy_ui_player_NativeEngine_nGetSpectrum(JNIEnv* env, jobject) {
+    jfloatArray result = env->NewFloatArray(SpectrumAnalyzer::kBins);
+    if (!result) return nullptr;
+    std::array<float, SpectrumAnalyzer::kBins> values{};
+    gSpectrum.read(values.data(), SpectrumAnalyzer::kBins);
+    env->SetFloatArrayRegion(result, 0, SpectrumAnalyzer::kBins, values.data());
+    return result;
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_jay_glossy_ui_player_NativeEngine_nGetRms(JNIEnv*, jobject) {
+    return gSpectrum.rms.load(std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_jay_glossy_ui_player_NativeEngine_nReset(JNIEnv*, jobject, jlong handle) {
+    if (auto* e = fromHandle(handle)) e->resetState();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_jay_glossy_ui_player_NativeEngine_nRelease(JNIEnv*, jobject, jlong handle) {
+    delete fromHandle(handle);
+}
+
+
+
+extern "C" void* glossy_dsp_create() {
+    return reinterpret_cast<void*>(new Engine());
+}
+
+extern "C" bool glossy_dsp_configure(void* handle, int sampleRate, int channels, int encoding) {
+    auto* e = reinterpret_cast<Engine*>(handle);
+    if (!e || sampleRate <= 0 || channels <= 0 || channels > 2 || bytesPerSample(encoding) == 0) return false;
+    e->configure(sampleRate, channels, encoding);
+    return true;
+}
+
+extern "C" void glossy_dsp_set(void* handle, bool enabled, const int* bandsMb, int bandCount,
+                                 bool bassEnabled, int bassStrength,
+                                 bool virtualizerEnabled, int virtualizerStrength,
+                                 bool outputGainEnabled, int outputGainMb,
+                                 bool autoHeadroom, bool bypass,
+                                 bool spatialEnabled, int spatialStrength,
+                                 bool crossfeedEnabled, int crossfeedStrength,
+                                 bool reverbEnabled, int reverbMix) {
+    auto* e = reinterpret_cast<Engine*>(handle);
+    if (!e) return;
+    std::vector<int> bands;
+    if (bandsMb && bandCount > 0) bands.assign(bandsMb, bandsMb + bandCount);
+    e->setDsp(enabled, bands, bassEnabled, bassStrength, virtualizerEnabled,
+              virtualizerStrength, outputGainEnabled, outputGainMb, autoHeadroom);
+    e->bypass = bypass;
+    e->setEffects(spatialEnabled, spatialStrength, crossfeedEnabled, crossfeedStrength, reverbEnabled, reverbMix);
+}
+
+extern "C" int glossy_dsp_process(void* handle, const void* input, void* output, int bytes) {
+    auto* e = reinterpret_cast<Engine*>(handle);
+    if (!e || !input || !output || bytes <= 0) return 0;
+    return processEngine(e, input, output, bytes);
+}
+
+extern "C" void glossy_dsp_reset(void* handle) {
+    if (auto* e = reinterpret_cast<Engine*>(handle)) e->resetState();
+}
+
+extern "C" void glossy_dsp_release(void* handle) {
+    delete reinterpret_cast<Engine*>(handle);
+}

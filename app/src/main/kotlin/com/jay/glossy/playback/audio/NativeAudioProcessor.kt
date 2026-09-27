@@ -32,8 +32,18 @@ class NativeAudioProcessor : AudioProcessor {
             throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
         }
 
-        if (!engine.configure(sampleRate, channelCount, encoding)) {
-            throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
+        val configured = try {
+            engine.configure(sampleRate, channelCount, encoding)
+        } catch (_: UnsatisfiedLinkError) {
+            false
+        }
+
+        // If the optional native DSP bridge is unavailable, leave this processor
+        // inactive so Media3 continues with its normal decoded PCM path instead
+        // of crashing the app on a JNI symbol mismatch.
+        if (!configured) {
+            active = false
+            return inputAudioFormat
         }
 
         active = true
@@ -46,12 +56,22 @@ class NativeAudioProcessor : AudioProcessor {
         val bytes = inputBuffer.remaining()
         if (bytes == 0) return
 
-        syncDspSettings()
+        try {
+            syncDspSettings()
+        } catch (_: UnsatisfiedLinkError) {
+            active = false
+            return
+        }
         val out = replaceOutputBuffer(bytes)
         // JNI sees the slice from the current input position, then we fully consume
         // the Media3 input buffer as required by AudioProcessor.
         val input = inputBuffer.slice().order(ByteOrder.nativeOrder())
-        val written = engine.process(input, out, bytes)
+        val written = try {
+            engine.process(input, out, bytes)
+        } catch (_: UnsatisfiedLinkError) {
+            active = false
+            return
+        }
         inputBuffer.position(inputBuffer.limit())
         if (written > 0) {
             out.position(0)
@@ -101,6 +121,12 @@ class NativeAudioProcessor : AudioProcessor {
             bassStrength = settings.bassBoostStrength,
             virtualizerEnabled = settings.virtualizerEnabled,
             virtualizerStrength = settings.virtualizerStrength,
+            spatialEnabled = settings.spatialEnabled,
+            spatialStrength = settings.spatialStrength,
+            crossfeedEnabled = settings.crossfeedEnabled,
+            crossfeedStrength = settings.crossfeedStrength,
+            reverbEnabled = settings.reverbEnabled,
+            reverbMix = settings.reverbMix,
             outputGainEnabled = settings.outputGainEnabled,
             outputGainMb = settings.outputGainMb,
             autoHeadroom = settings.autoHeadroomEnabled,
