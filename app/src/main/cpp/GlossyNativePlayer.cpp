@@ -140,7 +140,7 @@ media_status_t setDataSourceCustomCompat(AMediaExtractor* extractor, AMediaDataS
 
 class Player final : public oboe::AudioStreamDataCallback {
 public:
-    Player() : ring_(static_cast<size_t>(kOutputRate) * 6) {}
+    Player() : ring_(static_cast<size_t>(192000) * 4) {}
     ~Player() override { stop(); if (dsp_) glossy_dsp_release(dsp_); }
 
     bool play(const std::string& url, int64_t startMs) {
@@ -210,7 +210,8 @@ public:
         if (usingFallback_.load(std::memory_order_acquire) && fallback_) return fallback_->getCurrentPositionMs();
         const int64_t base = playbackBaseMs_.load(std::memory_order_acquire);
         const uint64_t frames = renderedFrames_.load(std::memory_order_acquire);
-        return base + static_cast<int64_t>((frames * 1000ULL) / static_cast<uint64_t>(kOutputRate));
+        const int rate = std::max(1, outputRate_.load(std::memory_order_acquire));
+        return base + static_cast<int64_t>((frames * 1000ULL) / static_cast<uint64_t>(rate));
     }
     int64_t duration() const { return usingFallback_.load(std::memory_order_acquire) && fallback_ ? fallback_->getDurationMs() : durationMs_.load(std::memory_order_acquire); }
     bool isPlaying() const { return usingFallback_.load(std::memory_order_acquire) && fallback_ ? fallback_->isPlaying() : (playing_.load(std::memory_order_acquire) && !paused_.load(std::memory_order_acquire)); }
@@ -292,6 +293,15 @@ private:
             LOGE("Oboe open failed: %s", oboe::convertToText(r));
             return false;
         }
+        const int actualRate = stream_->getSampleRate();
+        const int actualChannels = stream_->getChannelCount();
+        if (actualRate <= 0 || actualChannels != kOutputChannels) {
+            LOGE("Unsupported Oboe output format: rate=%d channels=%d", actualRate, actualChannels);
+            closeStream();
+            return false;
+        }
+        outputRate_.store(actualRate, std::memory_order_release);
+        LOGI("Oboe output: requested=%d actual=%d channels=%d", kOutputRate, actualRate, actualChannels);
         r = stream_->requestStart();
         if (r != oboe::Result::OK) {
             LOGE("Oboe start failed: %s", oboe::convertToText(r));
@@ -365,7 +375,7 @@ private:
                 std::lock_guard<std::mutex> lock(dspMutex_);
                 if (!dsp_) dsp_ = glossy_dsp_create();
                 if (!dsp_) return false;
-                glossy_dsp_configure(dsp_, kOutputRate, kOutputChannels, 4);
+                glossy_dsp_configure(dsp_, outputRate_.load(std::memory_order_acquire), kOutputChannels, 4);
                 dspDirty_ = false;
             }
             hasMedia_.store(true, std::memory_order_release);
@@ -376,7 +386,7 @@ private:
 
     void resetDsp() {
         std::lock_guard<std::mutex> lock(dspMutex_);
-        if (dsp_) { glossy_dsp_reset(dsp_); glossy_dsp_configure(dsp_, kOutputRate, kOutputChannels, 4); }
+        if (dsp_) { glossy_dsp_reset(dsp_); glossy_dsp_configure(dsp_, outputRate_.load(std::memory_order_acquire), kOutputChannels, 4); }
     }
 
     float decodeSample(const uint8_t* data, size_t index) const {
@@ -412,13 +422,14 @@ private:
     // Streaming linear resampler. It keeps one source frame across codec output boundaries.
     size_t resample(const std::vector<float>& input, size_t frames, std::vector<float>& output) {
         if (frames == 0) return 0;
-        if (sourceRate_ == kOutputRate) { output = input; return frames; }
+        const int outputRate = std::max(1, outputRate_.load(std::memory_order_acquire));
+        if (sourceRate_ == outputRate) { output = input; return frames; }
         std::vector<float> work;
         work.reserve((frames + 1) * 2);
         if (havePrev_) { work.push_back(prevL_); work.push_back(prevR_); }
         work.insert(work.end(), input.begin(), input.begin() + static_cast<std::ptrdiff_t>(frames * 2));
         const size_t workFrames = work.size() / 2;
-        const double step = static_cast<double>(sourceRate_) / static_cast<double>(kOutputRate);
+        const double step = static_cast<double>(sourceRate_) / static_cast<double>(outputRate);
         double pos = resamplePos_;
         output.clear();
         while (pos + 1.0 < static_cast<double>(workFrames)) {
@@ -467,7 +478,7 @@ private:
         {
             std::lock_guard<std::mutex> lock(dspMutex_);
             if (dsp_) {
-                if (dspDirty_) { glossy_dsp_configure(dsp_, kOutputRate, kOutputChannels, 4); dspDirty_ = false; }
+                if (dspDirty_) { glossy_dsp_configure(dsp_, outputRate_.load(std::memory_order_acquire), kOutputChannels, 4); dspDirty_ = false; }
                 glossy_dsp_process(dsp_, resampled.data(), processed.data(), static_cast<int>(resampled.size() * sizeof(float)));
             } else {
                 processed = resampled;
@@ -484,7 +495,8 @@ private:
     }
 
     void flushResamplerAtEos() {
-        if (sourceRate_ == kOutputRate || !havePrev_) return;
+        const int outputRate = std::max(1, outputRate_.load(std::memory_order_acquire));
+        if (sourceRate_ == outputRate || !havePrev_) return;
         std::vector<float> tail = {prevL_, prevR_};
         std::vector<float> out;
         // Duplicate the final source frame so the final interpolation interval can be emitted.
@@ -614,6 +626,7 @@ private:
     void* dsp_ = nullptr;
 
     int sourceRate_ = 48000;
+    std::atomic<int> outputRate_{kOutputRate};
     int sourceChannels_ = 2;
     int pcmEncoding_ = kPcm16Encoding;
     bool dspDirty_ = false;
