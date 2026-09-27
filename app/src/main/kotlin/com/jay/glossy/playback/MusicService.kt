@@ -811,7 +811,7 @@ class MusicService :
         scope.launch {
             dataStore.data.map { it[AudioEngineModeKey] ?: AudioEngineMode.EXOPLAYER.name }
                 .distinctUntilChanged()
-                .collectLatest { raw ->
+                .collectLatest(scope) { raw ->
                     val mode = runCatching { AudioEngineMode.valueOf(raw) }.getOrDefault(AudioEngineMode.EXOPLAYER)
                     if (mode != audioEngineMode) switchAudioEngine(mode)
                 }

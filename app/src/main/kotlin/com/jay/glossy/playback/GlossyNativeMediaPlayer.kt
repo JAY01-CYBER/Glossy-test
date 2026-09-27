@@ -65,7 +65,7 @@ class GlossyNativeMediaPlayer(
     override fun getState(): State {
         if (released) {
             return State.Builder()
-                .setAvailableCommands(Commands.EMPTY)
+                .setAvailableCommands(Player.Commands.EMPTY)
                 .setPlaybackState(Player.STATE_IDLE)
                 .build()
         }
@@ -90,7 +90,7 @@ class GlossyNativeMediaPlayer(
             else -> Player.STATE_READY
         }
 
-        val commands = Commands.Builder()
+        val commands = Player.Commands.Builder()
             .addAll(
                 Player.COMMAND_PLAY_PAUSE,
                 Player.COMMAND_PREPARE,
