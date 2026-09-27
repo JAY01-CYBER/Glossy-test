@@ -21,6 +21,15 @@
 #include "GlossyDspApi.h"
 #include "AudioDecoder.h"
 
+#ifdef LOG_TAG
+#undef LOG_TAG
+#endif
+#ifdef LOGE
+#undef LOGE
+#endif
+#ifdef LOGI
+#undef LOGI
+#endif
 #define LOG_TAG "GlossyNativePlayer"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -110,7 +119,7 @@ public:
         worker_ = std::thread(&Player::decodeLoop, this);
         // Do not report success until native decoder + output path are actually initialized.
         // This makes the Kotlin fallback decision deterministic instead of optimistic.
-        const bool ready = waitUntilReady(15_000);
+        const bool ready = waitUntilReady(15000);
         if (!ready) stop();
         return ready;
     }
@@ -131,7 +140,10 @@ public:
         stopRequested_.store(true, std::memory_order_release);
         if (fallback_) fallback_->stop();
         usingFallback_.store(false, std::memory_order_release);
-        if (dataSource_) AMediaDataSource_close(dataSource_);
+        if (dataSource_ && __builtin_available(android 29, *)) {
+            AMediaDataSource_close(dataSource_);
+            dataSourceClosed_ = true;
+        }
         if (stream_) stream_->requestStop();
         if (worker_.joinable()) worker_.join();
         closeCodec();
@@ -205,7 +217,11 @@ private:
         if (codec_) { AMediaCodec_stop(codec_); AMediaCodec_delete(codec_); codec_ = nullptr; }
         if (extractor_) { AMediaExtractor_delete(extractor_); extractor_ = nullptr; }
         if (trackFormat_) { AMediaFormat_delete(trackFormat_); trackFormat_ = nullptr; }
-        if (dataSource_) { AMediaDataSource_delete(dataSource_); dataSource_ = nullptr; }
+        if (dataSource_) {
+            if (!dataSourceClosed_ && __builtin_available(android 29, *)) AMediaDataSource_close(dataSource_);
+            if (__builtin_available(android 28, *)) AMediaDataSource_delete(dataSource_);
+            dataSource_ = nullptr;
+        }
         mime_.clear();
         hasMedia_.store(false, std::memory_order_release);
     }
@@ -246,7 +262,7 @@ private:
         std::string url;
         { std::lock_guard<std::mutex> lock(stateMutex_); url = url_; }
         media_status_t status = AMEDIA_ERROR_UNSUPPORTED;
-        if (android_get_device_api_level() >= 29) {
+        if (__builtin_available(android 29, *)) {
             const char* headers[] = {
                 "User-Agent",
                 "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36",
@@ -258,6 +274,7 @@ private:
             AMediaDataSource* source = AMediaDataSource_newUri(url.c_str(), 3, headers);
             if (source) {
                 dataSource_ = source;
+                dataSourceClosed_ = false;
                 status = AMediaExtractor_setDataSourceCustom(extractor_, source);
                 if (status != AMEDIA_OK) {
                     AMediaDataSource_close(source);
@@ -513,7 +530,7 @@ private:
                 const bool eos = (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0;
                 AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
                 if (eos) { flushResamplerAtEos(); break; }
-            } else if (outIndex == AMEDIA_CODEC_INFO_OUTPUT_FORMAT_CHANGED) {
+            } else if (outIndex == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
                 AMediaFormat* fmt = AMediaCodec_getOutputFormat(codec_);
                 if (fmt) {
                     AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sourceRate_);
@@ -544,6 +561,7 @@ private:
     AMediaCodec* codec_ = nullptr;
     AMediaFormat* trackFormat_ = nullptr;
     AMediaDataSource* dataSource_ = nullptr;
+    bool dataSourceClosed_ = false;
     std::shared_ptr<oboe::AudioStream> stream_;
     std::unique_ptr<AudioDecoder> fallback_;
     std::thread worker_;
