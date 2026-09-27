@@ -41,9 +41,18 @@ class GlossyNativeMediaPlayer(
     @Volatile private var state = Player.STATE_IDLE
 
     private val listener = object : Player.Listener {
-        override fun onTimelineChanged(timeline: Timeline, reason: Int) = invalidateState()
+        override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+            // The native engine is independent from ExoPlayer, so clearing the queue must
+            // explicitly tear down the native decoder/Oboe stream as well.
+            if (timeline.isEmpty) {
+                service.glossyNativePlayer.stop()
+            }
+            invalidateState()
+        }
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            if (mediaItem != null && playWhenReadyState) {
+            if (mediaItem == null) {
+                service.glossyNativePlayer.stop()
+            } else if (playWhenReadyState) {
                 scope.launch { service.startGlossyNativeForCurrentItem() }
             }
             invalidateState()
