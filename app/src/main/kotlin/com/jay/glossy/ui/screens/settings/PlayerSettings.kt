@@ -240,7 +240,7 @@ fun PlayerSettings(
         mutableStateOf(false)
     }
 
-    if (showAudioQualityDialog) {
+    if (showAudioEngineDialog) {
         EnumDialog(
             onDismiss = { showAudioEngineDialog = false },
             onSelect = {
@@ -257,7 +257,9 @@ fun PlayerSettings(
                 }
             }
         )
+    }
 
+    if (showAudioQualityDialog) {
         EnumDialog(
             onDismiss = { showAudioQualityDialog = false },
             onSelect = {
