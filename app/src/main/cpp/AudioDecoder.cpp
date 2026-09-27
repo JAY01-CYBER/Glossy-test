@@ -48,12 +48,46 @@ bool AudioDecoder::openOutputStream() {
         LOGE("FFmpeg Oboe open failed: %s", oboe::convertToText(result));
         return false;
     }
+    const int actualRate = audioStream->getSampleRate();
+    const int actualChannels = audioStream->getChannelCount();
+    const auto actualFormat = audioStream->getFormat();
+    LOGI("FFmpeg Oboe output: requested=%d actual=%d channels=%d format=%s",
+         targetSampleRate, actualRate, actualChannels, oboe::convertToText(actualFormat));
+    if (actualRate > 0) targetSampleRate = actualRate;
+    if (actualChannels != targetChannels || actualFormat != oboe::AudioFormat::I16) {
+        LOGE("FFmpeg Oboe unsupported negotiated format: rate=%d channels=%d format=%s",
+             actualRate, actualChannels, oboe::convertToText(actualFormat));
+        audioStream->close();
+        audioStream.reset();
+        return false;
+    }
     if (audioStream->requestStart() != oboe::Result::OK) {
         audioStream->close();
         audioStream.reset();
         return false;
     }
     return true;
+}
+
+bool AudioDecoder::configureResampler() {
+    if (swrCtx) {
+        swr_free(&swrCtx);
+    }
+    swrCtx = swr_alloc();
+    if (!swrCtx) return false;
+
+    AVChannelLayout inLayout = codecCtx->ch_layout;
+    if (inLayout.nb_channels <= 0) av_channel_layout_default(&inLayout, sourceChannels);
+    AVChannelLayout outLayout;
+    av_channel_layout_default(&outLayout, targetChannels);
+    av_opt_set_chlayout(swrCtx, "in_chlayout", &inLayout, 0);
+    av_opt_set_int(swrCtx, "in_sample_rate", sourceSampleRate, 0);
+    av_opt_set_sample_fmt(swrCtx, "in_sample_fmt", codecCtx->sample_fmt, 0);
+    av_opt_set_chlayout(swrCtx, "out_chlayout", &outLayout, 0);
+    av_opt_set_int(swrCtx, "out_sample_rate", targetSampleRate, 0);
+    av_opt_set_sample_fmt(swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+    av_channel_layout_uninit(&outLayout);
+    return swr_init(swrCtx) >= 0;
 }
 
 bool AudioDecoder::openUrl(const std::string& url, int64_t startPositionMs) {
@@ -99,25 +133,17 @@ bool AudioDecoder::openUrl(const std::string& url, int64_t startPositionMs) {
     int64_t durationUs = formatCtx->duration;
     if (durationUs > 0 && durationUs != AV_NOPTS_VALUE) durationMs.store(durationUs / 1000);
 
-    swrCtx = swr_alloc();
-    if (!swrCtx) { error_.store(true); releaseCodec(); return false; }
-    AVChannelLayout inLayout = codecCtx->ch_layout;
-    if (inLayout.nb_channels <= 0) av_channel_layout_default(&inLayout, sourceChannels);
-    AVChannelLayout outLayout;
-    av_channel_layout_default(&outLayout, targetChannels);
-    av_opt_set_chlayout(swrCtx, "in_chlayout", &inLayout, 0);
-    av_opt_set_int(swrCtx, "in_sample_rate", sourceSampleRate, 0);
-    av_opt_set_sample_fmt(swrCtx, "in_sample_fmt", codecCtx->sample_fmt, 0);
-    av_opt_set_chlayout(swrCtx, "out_chlayout", &outLayout, 0);
-    av_opt_set_int(swrCtx, "out_sample_rate", targetSampleRate, 0);
-    av_opt_set_sample_fmt(swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
-    av_channel_layout_uninit(&outLayout);
-    if (swr_init(swrCtx) < 0) { error_.store(true); releaseCodec(); return false; }
+    if (!configureResampler()) { error_.store(true); releaseCodec(); return false; }
 
     {
         std::lock_guard<std::mutex> lock(bufferMutex);
         audioBuffer.clear();
     }
+    if (!openOutputStream()) { error_.store(true); releaseCodec(); return false; }
+    // Shared Android outputs may negotiate a different native rate (commonly 96/192 kHz).
+    // Rebuild the FFmpeg resampler for the actual Oboe stream rate so PCM is never consumed
+    // at 4x/2x speed.
+    if (!configureResampler()) { error_.store(true); releaseCodec(); return false; }
     {
         std::lock_guard<std::mutex> lock(dspMutex);
         if (!dsp_) dsp_ = glossy_dsp_create();
@@ -126,8 +152,6 @@ bool AudioDecoder::openUrl(const std::string& url, int64_t startPositionMs) {
         }
         dspDirty_ = false;
     }
-
-    if (!openOutputStream()) { error_.store(true); releaseCodec(); return false; }
 
     if (startPositionMs > 0) {
         av_seek_frame(formatCtx, audioStreamIndex,

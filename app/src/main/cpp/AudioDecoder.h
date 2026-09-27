@@ -85,6 +85,7 @@ private:
     void releaseCodec();
     bool openOutputStream();
     void processFrame(int64_t ptsUs);
+    bool configureResampler();
 };
 
 #endif

@@ -357,6 +357,7 @@ private:
             AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sourceRate_);
             AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &sourceChannels_);
             sourceRate_ = std::clamp(sourceRate_, 8000, 192000);
+            trackSourceRate_ = sourceRate_;
             sourceChannels_ = std::clamp(sourceChannels_, 1, 2);
             int64_t durationUs = 0;
             if (AMediaFormat_getInt64(fmt, AMEDIAFORMAT_KEY_DURATION, &durationUs) && durationUs > 0) {
@@ -590,13 +591,28 @@ private:
             } else if (outIndex == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
                 AMediaFormat* fmt = AMediaCodec_getOutputFormat(codec_);
                 if (fmt) {
-                    AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sourceRate_);
-                    AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &sourceChannels_);
+                    int32_t outputRate = sourceRate_;
+                    int32_t outputChannels = sourceChannels_;
+                    AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_SAMPLE_RATE, &outputRate);
+                    AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &outputChannels);
                     int32_t enc = pcmEncoding_;
                     AMediaFormat_getInt32(fmt, kPcmEncodingKey, &enc);
                     pcmEncoding_ = enc;
-                    sourceRate_ = std::clamp(sourceRate_, 8000, 192000);
-                    sourceChannels_ = std::clamp(sourceChannels_, 1, 2);
+
+                    // MediaCodec output PCM should keep the track's native sample rate.
+                    // Some vendor codecs report the device/output rate here (for example
+                    // 192 kHz for a 48 kHz stream). Treating that metadata as decoder rate
+                    // would make the resampler consume 4 source frames per output frame,
+                    // producing the exact ~4x-speed symptom. Keep the track rate authoritative.
+                    if (outputRate > 0 && outputRate != trackSourceRate_) {
+                        LOGE("Ignoring suspicious MediaCodec output rate=%d; track rate=%d",
+                             outputRate, trackSourceRate_);
+                    }
+                    sourceRate_ = trackSourceRate_;
+                    if (outputChannels >= 1 && outputChannels <= 2) {
+                        sourceChannels_ = outputChannels;
+                    }
+                    ring_.clear();
                     resetResampler();
                     resetDsp();
                     AMediaFormat_delete(fmt);
@@ -626,6 +642,7 @@ private:
     void* dsp_ = nullptr;
 
     int sourceRate_ = 48000;
+    int trackSourceRate_ = 48000;
     std::atomic<int> outputRate_{kOutputRate};
     int sourceChannels_ = 2;
     int pcmEncoding_ = kPcm16Encoding;
