@@ -231,6 +231,8 @@ import com.jay.glossy.widget.PlaylistWidgetReceiver
 import com.jay.glossy.ui.utils.resize
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.coroutineContext
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineScope
@@ -334,6 +336,7 @@ class MusicService :
     /** Standalone native decoder/output engine. ExoPlayer remains the session/queue fallback. */
     val glossyNativePlayer = NativePlayer()
     @Volatile private var audioEngineMode = AudioEngineMode.EXOPLAYER
+    private val nativeStartMutex = Mutex()
 
     inner class MusicBinder : Binder() {
         val service: MusicService
@@ -440,21 +443,25 @@ class MusicService :
         }
     }
 
-    private suspend fun startGlossyNative(mediaId: String, positionMs: Long): Boolean {
-        // Stream URLs can expire or be rejected between resolution and native opening.
-        // Resolve a fresh URL once before giving up so native playback does not fail merely
-        // because the first URL became stale.
-        for (attempt in 0..1) {
-            val url = getStreamUrl(mediaId)
-            if (url != null) {
-                glossyNativePlayer.syncDsp()
-                val started = withContext(Dispatchers.IO) { glossyNativePlayer.playUrl(url, positionMs) }
-                if (started) return true
+    private suspend fun startGlossyNative(mediaId: String, positionMs: Long): Boolean =
+        nativeStartMutex.withLock {
+            // NativePlayer owns a single native decoder/Oboe stream. Serialize starts so
+            // media-transition callbacks cannot race play/stop and tear down the worker.
+            // Stream URLs can expire or be rejected between resolution and native opening.
+            for (attempt in 0..1) {
+                if (audioEngineMode != AudioEngineMode.GLOSSY_NATIVE) return@withLock false
+                val currentId = player.currentMediaItem?.mediaId
+                if (currentId != null && currentId != mediaId) return@withLock false
+                val url = getStreamUrl(mediaId)
+                if (url != null) {
+                    glossyNativePlayer.syncDsp()
+                    val started = withContext(Dispatchers.IO) { glossyNativePlayer.playUrl(url, positionMs) }
+                    if (started) return@withLock true
+                }
+                if (attempt == 0) delay(250)
             }
-            if (attempt == 0) delay(250)
+            false
         }
-        return false
-    }
 
     suspend fun startGlossyNativeForCurrentItem() {
         if (audioEngineMode != AudioEngineMode.GLOSSY_NATIVE || !::player.isInitialized) return
