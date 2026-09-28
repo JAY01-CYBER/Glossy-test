@@ -711,7 +711,9 @@ extern "C" void glossy_dsp_set(void* handle, bool enabled, const int* bandsMb, i
     e->setDsp(enabled, bands, bassEnabled, bassStrength, virtualizerEnabled,
               virtualizerStrength, outputGainEnabled, outputGainMb, autoHeadroom);
     e->bypass = bypass;
-    e->setEffects(spatialEnabled, spatialStrength, crossfeedEnabled, crossfeedStrength, reverbEnabled, reverbMix);
+    e->setEffects(spatialEnabled, spatialStrength, crossfeedEnabled, crossfeedStrength, reverbEnabled, reverbMix,
+                  clarityEnabled, clarityStrength, compressorEnabled, compressorStrength,
+                  limiterEnabled, limiterStrength);
 }
 
 extern "C" int glossy_dsp_process(void* handle, const void* input, void* output, int bytes) {

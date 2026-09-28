@@ -221,12 +221,15 @@ public:
     void setDsp(const int* bands, int count, bool enabled, bool bass, int bassStrength,
                 bool virtualizer, int virtualizerStrength, bool spatial, int spatialStrength,
                 bool crossfeed, int crossfeedStrength, bool reverb, int reverbMix,
+                bool clarity, int clarityStrength, bool compressor, int compressorStrength,
+                bool limiter, int limiterStrength,
                 bool gain, int gainMb, bool headroom, bool bypass) {
         std::lock_guard<std::mutex> lock(dspMutex_);
         if (!dsp_) dsp_ = glossy_dsp_create();
         if (dsp_) {
             glossy_dsp_set(dsp_, enabled, bands, count, bass, bassStrength, virtualizer,
-                           virtualizerStrength, gain, gainMb, headroom, bypass, spatial, spatialStrength, crossfeed, crossfeedStrength, reverb, reverbMix);
+                           virtualizerStrength, gain, gainMb, headroom, bypass, spatial, spatialStrength, crossfeed, crossfeedStrength,
+                           reverb, reverbMix, clarity, clarityStrength, compressor, compressorStrength, limiter, limiterStrength);
             dspDirty_ = true;
         }
     }
@@ -731,10 +734,13 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_jay_glossy_ui_player_NativePlayer
 extern "C" JNIEXPORT jboolean JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nIsPlaying(JNIEnv*, jobject, jlong h) { auto* p=reinterpret_cast<Player*>(h); return p && p->isPlaying() ? JNI_TRUE : JNI_FALSE; }
 extern "C" JNIEXPORT jboolean JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nHasError(JNIEnv*, jobject, jlong h) { auto* p=reinterpret_cast<Player*>(h); return p && p->hasError() ? JNI_TRUE : JNI_FALSE; }
 extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nSetVolume(JNIEnv*, jobject, jlong h, jfloat v) { if (auto* p=reinterpret_cast<Player*>(h)) p->setVolume(v); }
-extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nSetDsp(JNIEnv* env, jobject, jlong h, jboolean enabled, jintArray bandsMb, jboolean bass, jint bassStrength, jboolean virtualizer, jint virtualizerStrength, jboolean spatial, jint spatialStrength, jboolean crossfeed, jint crossfeedStrength, jboolean reverb, jint reverbMix, jboolean gain, jint gainMb, jboolean headroom, jboolean bypass) {
+extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nSetDsp(JNIEnv* env, jobject, jlong h, jboolean enabled, jintArray bandsMb, jboolean bass, jint bassStrength, jboolean virtualizer, jint virtualizerStrength, jboolean spatial, jint spatialStrength, jboolean crossfeed, jint crossfeedStrength, jboolean reverb, jint reverbMix, jboolean clarity, jint clarityStrength, jboolean compressor, jint compressorStrength, jboolean limiter, jint limiterStrength, jboolean gain, jint gainMb, jboolean headroom, jboolean bypass) {
     auto* p=reinterpret_cast<Player*>(h); if (!p) return;
     std::vector<int> bands;
     if (bandsMb) { const jsize n=env->GetArrayLength(bandsMb); bands.resize(static_cast<size_t>(n)); if (n>0) env->GetIntArrayRegion(bandsMb,0,n,bands.data()); }
-    p->setDsp(bands.data(), static_cast<int>(bands.size()), enabled==JNI_TRUE, bass==JNI_TRUE, bassStrength, virtualizer==JNI_TRUE, virtualizerStrength, spatial==JNI_TRUE, spatialStrength, crossfeed==JNI_TRUE, crossfeedStrength, reverb==JNI_TRUE, reverbMix, gain==JNI_TRUE, gainMb, headroom==JNI_TRUE, bypass==JNI_TRUE);
+    p->setDsp(bands.data(), static_cast<int>(bands.size()), enabled==JNI_TRUE, bass==JNI_TRUE, bassStrength, virtualizer==JNI_TRUE, virtualizerStrength,
+              spatial==JNI_TRUE, spatialStrength, crossfeed==JNI_TRUE, crossfeedStrength, reverb==JNI_TRUE, reverbMix,
+              clarity==JNI_TRUE, clarityStrength, compressor==JNI_TRUE, compressorStrength, limiter==JNI_TRUE, limiterStrength,
+              gain==JNI_TRUE, gainMb, headroom==JNI_TRUE, bypass==JNI_TRUE);
 }
 extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nRelease(JNIEnv*, jobject, jlong h) { delete reinterpret_cast<Player*>(h); }

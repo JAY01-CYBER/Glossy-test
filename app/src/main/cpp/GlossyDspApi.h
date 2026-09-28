@@ -11,7 +11,10 @@ void glossy_dsp_set(void* handle, bool enabled, const int* bandsMb, int bandCoun
                     bool autoHeadroom, bool bypass,
                     bool spatialEnabled, int spatialStrength,
                     bool crossfeedEnabled, int crossfeedStrength,
-                    bool reverbEnabled, int reverbMix);
+                    bool reverbEnabled, int reverbMix,
+                    bool clarityEnabled, int clarityStrength,
+                    bool compressorEnabled, int compressorStrength,
+                    bool limiterEnabled, int limiterStrength);
 int glossy_dsp_process(void* handle, const void* input, void* output, int bytes);
 void glossy_dsp_reset(void* handle);
 void glossy_dsp_release(void* handle);
