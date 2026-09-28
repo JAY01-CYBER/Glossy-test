@@ -334,10 +334,6 @@ class PlayerConnection(
                 }
             } else {
                 player.togglePlayPause()
-                if (service.isGlossyNativeEngine()) {
-                    if (player.playWhenReady) scope.launch { service.startGlossyNativeForCurrentItem() }
-                    else service.glossyNativePlayer.pause()
-                }
             }
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error in togglePlayPause")
@@ -354,7 +350,6 @@ class PlayerConnection(
                     player.prepare()
                 }
                 player.playWhenReady = true
-                if (service.isGlossyNativeEngine()) scope.launch { service.startGlossyNativeForCurrentItem() }
             }
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error in play")
@@ -368,7 +363,6 @@ class PlayerConnection(
                 castHandler.pause()
             } else {
                 player.playWhenReady = false
-                if (service.isGlossyNativeEngine()) service.glossyNativePlayer.pause()
             }
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error in pause")
@@ -382,7 +376,6 @@ class PlayerConnection(
                 castHandler.seekTo(position)
             } else {
                 player.seekTo(position)
-                if (service.isGlossyNativeEngine()) service.glossyNativePlayer.seekTo(position)
             }
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error in seekTo")

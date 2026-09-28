@@ -336,6 +336,7 @@ class MusicService :
 
     /** Standalone native decoder/output engine. ExoPlayer remains the session/queue fallback. */
     val glossyNativePlayer = NativePlayer()
+    private lateinit var nativeAudioProcessor: NativeAudioProcessor
     @Volatile private var audioEngineMode = AudioEngineMode.EXOPLAYER
     private val nativeStartMutex = Mutex()
     private val nativeStartGeneration = AtomicLong(0L)
@@ -396,100 +397,30 @@ class MusicService :
     private fun applyEffectiveVolume() {
         if (!::player.isInitialized || isCrossfading) return
         val vol = calculateEffectiveVolume()
-        if (audioEngineMode == AudioEngineMode.GLOSSY_NATIVE) {
-            player.volume = 0f
-            glossyNativePlayer.setVolume(vol)
-        } else {
-            player.volume = vol
-        }
+        player.volume = vol
+        nativeAudioProcessor.setRoutingEnabled(audioEngineMode == AudioEngineMode.GLOSSY_NATIVE)
     }
 
     fun isGlossyNativeEngine(): Boolean = audioEngineMode == AudioEngineMode.GLOSSY_NATIVE
 
     suspend fun switchAudioEngine(mode: AudioEngineMode) {
         if (!::player.isInitialized || mode == audioEngineMode) return
-        val position = player.currentPosition.coerceAtLeast(0L)
-        val wasPlaying = player.playWhenReady
-        // Invalidate every in-flight native start before changing ownership.
-        val generation = nativeStartGeneration.incrementAndGet()
         audioEngineMode = mode
-        glossyNativeMediaPlayer?.let { nativeSessionPlayer ->
-            mediaSession?.player = if (mode == AudioEngineMode.GLOSSY_NATIVE) nativeSessionPlayer else player
-        }
+        nativeAudioProcessor.setRoutingEnabled(mode == AudioEngineMode.GLOSSY_NATIVE)
+        // ExoPlayer remains the sole decoder, buffering owner and AudioSink owner in both
+        // modes. Glossy Native mode means the decoded PCM is processed by the C++ DSP
+        // AudioProcessor; it does not create a second competing decoder/output clock.
+        player.volume = calculateEffectiveVolume()
         if (mode == AudioEngineMode.GLOSSY_NATIVE) {
-            player.volume = 0f
-            val id = player.currentMediaItem?.mediaId
-            if (id != null) {
-                val started = startGlossyNative(id, position, generation)
-                if (started) {
-                    // Native mode owns the audible clock. Keep ExoPlayer stopped so it does not
-                    // decode/buffer the same stream behind the native engine.
-                    player.playWhenReady = false
-                    player.stop()
-                    glossyNativePlayer.setVolume(calculateEffectiveVolume())
-                } else {
-                    // Keep the user's selected engine. A native startup failure must not
-                    // silently rewrite the preference to ExoPlayer; that made it look like
-                    // the native engine was automatically switching engines.
-                    Timber.tag(TAG).e("Glossy native engine failed to start; keeping GLOSSY_NATIVE selected")
-                    player.volume = 0f
-                }
-            }
-            if (!wasPlaying) glossyNativePlayer.pause()
-        } else {
-            val positionForFallback = glossyNativePlayer.position().coerceAtLeast(0L)
             glossyNativePlayer.stop()
-            if (player.currentMediaItem != null) {
-                player.seekTo(positionForFallback)
-                player.prepare()
-            }
-            player.volume = calculateEffectiveVolume()
-            player.playWhenReady = wasPlaying
         }
+        applyEffectiveVolume()
     }
 
-    private suspend fun startGlossyNative(mediaId: String, positionMs: Long, generation: Long): Boolean =
-        nativeStartMutex.withLock {
-            // NativePlayer owns a single native decoder/Oboe stream. Serialize starts so
-            // media-transition callbacks cannot race play/stop and tear down the worker.
-            // Stream URLs can expire or be rejected between resolution and native opening.
-            for (attempt in 0..1) {
-                if (generation != nativeStartGeneration.get()) return@withLock false
-                if (audioEngineMode != AudioEngineMode.GLOSSY_NATIVE) return@withLock false
-                val currentId = player.currentMediaItem?.mediaId
-                if (currentId != null && currentId != mediaId) return@withLock false
-                val url = getStreamUrl(mediaId)
-                if (url != null) {
-                    glossyNativePlayer.syncDsp()
-                    val started = withContext(Dispatchers.IO) { glossyNativePlayer.playUrl(url, positionMs) }
-                    // The native call is synchronous and may take seconds. If the queue
-                    // changed while it was opening, immediately tear down the stale session
-                    // instead of letting an old song steal the new song's audio clock.
-                    if (generation != nativeStartGeneration.get() || audioEngineMode != AudioEngineMode.GLOSSY_NATIVE || player.currentMediaItem?.mediaId != mediaId) {
-                        if (started) glossyNativePlayer.stop()
-                        return@withLock false
-                    }
-                    if (started) return@withLock true
-                }
-                if (attempt == 0) delay(250)
-            }
-            false
-        }
-
     suspend fun startGlossyNativeForCurrentItem() {
-        if (audioEngineMode != AudioEngineMode.GLOSSY_NATIVE || !::player.isInitialized) return
-        val id = player.currentMediaItem?.mediaId ?: return
-        val position = player.currentPosition.coerceAtLeast(0L)
-        val generation = nativeStartGeneration.incrementAndGet()
-        val started = startGlossyNative(id, position, generation)
-        if (started) {
-            glossyNativePlayer.setVolume(calculateEffectiveVolume())
-            player.volume = 0f
-        } else {
-            // Do not silently switch the engine. The selected engine remains authoritative.
-            Timber.tag(TAG).e("Glossy native engine failed for current item; keeping GLOSSY_NATIVE selected")
-            player.volume = 0f
-        }
+        // Kept for source compatibility with existing callers. Playback is already owned by
+        // ExoPlayer; the native Glossy engine is inserted into its AudioProcessorChain.
+        nativeAudioProcessor.setRoutingEnabled(audioEngineMode == AudioEngineMode.GLOSSY_NATIVE)
     }
 
 
@@ -826,7 +757,10 @@ class MusicService :
                 .let { runCatching { AudioEngineMode.valueOf(it) }.getOrDefault(AudioEngineMode.EXOPLAYER) }
         }
         player = createExoPlayer(prefs = startupPrefs!!)
-        if (audioEngineMode == AudioEngineMode.GLOSSY_NATIVE) player.volume = 0f
+        // Glossy Native is a native DSP route inside ExoPlayer's AudioSink. Keep ExoPlayer
+        // audible in both modes; only the PCM processing route changes.
+        nativeAudioProcessor.setRoutingEnabled(audioEngineMode == AudioEngineMode.GLOSSY_NATIVE)
+        player.volume = 1f
 
         scope.launch {
             dataStore.data.map { it[AudioEngineModeKey] ?: AudioEngineMode.EXOPLAYER.name }
@@ -864,10 +798,9 @@ class MusicService :
             toggleLibrary = ::toggleLibrary
             addToTargetPlaylist = ::addToTargetPlaylist
         }
-        glossyNativeMediaPlayer = GlossyNativeMediaPlayer(this, mainLooper, scope)
         mediaSession =
             MediaLibrarySession
-                .Builder(this, if (audioEngineMode == AudioEngineMode.GLOSSY_NATIVE) glossyNativeMediaPlayer!! else player, mediaLibrarySessionCallback)
+                .Builder(this, player, mediaLibrarySessionCallback)
                 .setSessionActivity(
                     PendingIntent.getActivity(
                         this,
@@ -1543,7 +1476,7 @@ class MusicService :
         equalizerService.addAudioProcessor(eqProcessor)
 
         val silenceProcessor = SilenceDetectorAudioProcessor { handleLongSilenceDetected() }
-        val nativeAudioProcessor = NativeAudioProcessor()
+        nativeAudioProcessor = NativeAudioProcessor()
 
         // Set initial state — use pre-read prefs when available, otherwise fall back to DataStore
         val useAudioTrackPlaybackParams = if (prefs != null) {
@@ -4108,11 +4041,7 @@ class MusicService :
             .setEnableAudioTrackPlaybackParams(useAudioTrackPlaybackParams)
             .setAudioProcessorChain(
                 DefaultAudioSink.DefaultAudioProcessorChain(
-                    if (audioEngineMode == AudioEngineMode.GLOSSY_NATIVE) {
-                        arrayOf(normalizationProcessor, eqProcessor, silenceProcessor)
-                    } else {
-                        arrayOf(normalizationProcessor, eqProcessor, silenceProcessor, nativeAudioProcessor)
-                    },
+                    arrayOf(normalizationProcessor, eqProcessor, silenceProcessor, nativeAudioProcessor),
                     SilenceSkippingAudioProcessor(2_000_000, 20_000, 256),
                     SonicAudioProcessor(),
                 ),
