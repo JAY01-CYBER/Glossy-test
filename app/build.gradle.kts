@@ -444,5 +444,4 @@ dependencies {
     // C++ Audio Engine Dependencies
     // ==========================================
     implementation("com.google.oboe:oboe:1.8.1")
-    implementation(libs.ffmpeg.ssl)
 }

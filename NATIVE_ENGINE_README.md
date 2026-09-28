@@ -43,4 +43,4 @@ Static source/ZIP checks were completed. The available build runner could not do
 
 ## Native decoder fallback
 
-The native player uses Android NDK MediaExtractor/MediaCodec as the primary decoder. If that path cannot open/configure the stream, the same native player falls back to the bundled FFmpeg Prefab (`io.github.yearsyan:ffmpeg-ssl:7.1.5-r2`). FFmpeg decoded PCM is resampled to the engine output format, passed through the same Glossy DSP API, and rendered through Oboe. ExoPlayer remains the higher-level application fallback when the native player itself cannot start.
+The native player uses Android NDK MediaExtractor/MediaCodec as the primary decoder. The native player keeps one decoder/output path: Android NDK MediaExtractor/MediaCodec produces PCM, the decoder output format is treated as authoritative, PCM is resampled to the negotiated Oboe output rate, then passed through the Glossy DSP API and rendered through Oboe. ExoPlayer remains the higher-level application fallback when the native player itself cannot start.

@@ -14,14 +14,12 @@
 #include <cstdint>
 #include <condition_variable>
 #include <cstring>
-#include <cmath>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 #include "GlossyDspApi.h"
-#include "AudioDecoder.h"
 
 #ifdef LOG_TAG
 #undef LOG_TAG
@@ -160,14 +158,6 @@ public:
         stopRequested_.store(false, std::memory_order_release);
         paused_.store(false, std::memory_order_release);
         error_.store(false, std::memory_order_release);
-        usingFallback_.store(false, std::memory_order_release);
-        audioReady_.store(false, std::memory_order_release);
-        firstPcmSeen_.store(false, std::memory_order_release);
-        inputSubmitted_.store(false, std::memory_order_release);
-        lastPcmPtsUs_.store(-1, std::memory_order_release);
-        observedPcmFrames_.store(0, std::memory_order_release);
-        codecReportedRate_ = 0;
-        decoderPcmRateLocked_ = false;
         initDone_.store(false, std::memory_order_release);
         worker_ = std::thread(&Player::decodeLoop, this);
         // Do not report success until native decoder + output path are actually initialized.
@@ -179,20 +169,16 @@ public:
 
     void pause() {
         paused_.store(true, std::memory_order_release);
-        if (usingFallback_.load(std::memory_order_acquire) && fallback_) fallback_->pause();
         if (stream_) stream_->requestPause();
     }
 
     void resume() {
         paused_.store(false, std::memory_order_release);
-        if (usingFallback_.load(std::memory_order_acquire) && fallback_) fallback_->resume();
         if (stream_) stream_->requestStart();
     }
 
     void stop() {
         stopRequested_.store(true, std::memory_order_release);
-        if (fallback_) fallback_->stop();
-        usingFallback_.store(false, std::memory_order_release);
         if (dataSource_ && !dataSourceClosed_) {
             closeDataSourceCompat(dataSource_);
             dataSourceClosed_ = true;
@@ -203,12 +189,10 @@ public:
         closeStream();
         ring_.clear();
         playing_.store(false, std::memory_order_release);
-        audioReady_.store(false, std::memory_order_release);
     }
 
     bool seek(int64_t ms) {
         const int64_t target = std::max<int64_t>(0, ms);
-        if (usingFallback_.load(std::memory_order_acquire) && fallback_) return fallback_->seekTo(target);
         if (!hasMedia_.load(std::memory_order_acquire)) return false;
         seekMs_.store(target, std::memory_order_release);
         seekRequested_.store(true, std::memory_order_release);
@@ -216,24 +200,23 @@ public:
     }
 
     int64_t position() const {
-        if (usingFallback_.load(std::memory_order_acquire) && fallback_) return fallback_->getCurrentPositionMs();
         const int64_t base = playbackBaseMs_.load(std::memory_order_acquire);
         const uint64_t frames = renderedFrames_.load(std::memory_order_acquire);
         const int rate = std::max(1, outputRate_.load(std::memory_order_acquire));
         return base + static_cast<int64_t>((frames * 1000ULL) / static_cast<uint64_t>(rate));
     }
-    int64_t duration() const { return usingFallback_.load(std::memory_order_acquire) && fallback_ ? fallback_->getDurationMs() : durationMs_.load(std::memory_order_acquire); }
-    bool isPlaying() const { return usingFallback_.load(std::memory_order_acquire) && fallback_ ? fallback_->isPlaying() : (playing_.load(std::memory_order_acquire) && !paused_.load(std::memory_order_acquire)); }
-    bool hasError() const { return usingFallback_.load(std::memory_order_acquire) && fallback_ ? fallback_->hasError() : error_.load(std::memory_order_acquire); }
+    int64_t duration() const { return durationMs_.load(std::memory_order_acquire); }
+    bool isPlaying() const { return playing_.load(std::memory_order_acquire) && !paused_.load(std::memory_order_acquire); }
+    bool hasError() const { return error_.load(std::memory_order_acquire); }
     bool waitUntilReady(int timeoutMs) {
         std::unique_lock<std::mutex> lock(initMutex_);
         initCv_.wait_for(lock, std::chrono::milliseconds(std::max(1, timeoutMs)), [this] {
             return initDone_.load(std::memory_order_acquire) || stopRequested_.load(std::memory_order_acquire);
         });
-        return audioReady_.load(std::memory_order_acquire) && !hasError();
+        return hasMedia_.load(std::memory_order_acquire) && !hasError();
     }
 
-    void setVolume(float v) { volume_.store(std::clamp(v, 0.0f, 1.0f), std::memory_order_release); if (usingFallback_.load(std::memory_order_acquire) && fallback_) fallback_->setVolume(v); }
+    void setVolume(float v) { volume_.store(std::clamp(v, 0.0f, 1.0f), std::memory_order_release); }
 
     void setDsp(const int* bands, int count, bool enabled, bool bass, int bassStrength,
                 bool virtualizer, int virtualizerStrength, bool spatial, int spatialStrength,
@@ -245,10 +228,6 @@ public:
             glossy_dsp_set(dsp_, enabled, bands, count, bass, bassStrength, virtualizer,
                            virtualizerStrength, gain, gainMb, headroom, bypass, spatial, spatialStrength, crossfeed, crossfeedStrength, reverb, reverbMix);
             dspDirty_ = true;
-        }
-        if (usingFallback_.load(std::memory_order_acquire) && fallback_) {
-            fallback_->setDsp(bands, count, enabled, bass, bassStrength, virtualizer,
-                              virtualizerStrength, gain, gainMb, headroom, bypass, spatial, spatialStrength, crossfeed, crossfeedStrength, reverb, reverbMix);
         }
     }
 
@@ -291,7 +270,9 @@ private:
         builder.setDirection(oboe::Direction::Output)
             ->setFormat(oboe::AudioFormat::Float)
             ->setChannelCount(kOutputChannels)
-            ->setSampleRate(kOutputRate)
+            // Let Oboe/AAudio negotiate the device-native rate. We then explicitly
+            // resample decoder PCM to the rate actually returned by the stream.
+            ->setSampleRate(0)
             ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
             ->setSharingMode(oboe::SharingMode::Shared)
             ->setUsage(oboe::Usage::Media)
@@ -304,6 +285,9 @@ private:
         }
         const int actualRate = stream_->getSampleRate();
         const int actualChannels = stream_->getChannelCount();
+        const auto actualFormat = stream_->getFormat();
+        LOGI("Oboe output negotiated: requested=default actual=%dHz/%dch format=%s",
+             actualRate, actualChannels, oboe::convertToText(actualFormat));
         if (actualRate <= 0 || actualChannels != kOutputChannels) {
             LOGE("Unsupported Oboe output format: rate=%d channels=%d", actualRate, actualChannels);
             closeStream();
@@ -375,6 +359,7 @@ private:
             int32_t pcmEncoding = kPcm16Encoding;
             AMediaFormat_getInt32(fmt, kPcmEncodingKey, &pcmEncoding);
             pcmEncoding_ = pcmEncoding;
+            outputFormatLocked_ = false;
 
             codec_ = AMediaCodec_createDecoderByType(mime_.c_str());
             if (!codec_) return false;
@@ -482,54 +467,10 @@ private:
         const size_t frames = decodeToStereo(pcm, bytes, stereo);
         if (!frames) return;
 
-        // Do not trust a delayed MediaCodec output-format sample-rate blindly.
-        // ExoPlayer effectively derives its audio clock from the decoder's actual
-        // PCM stream. We do the same: compare decoded PCM frame counts with decoder
-        // PTS over consecutive buffers. A vendor may report 192 kHz for a 48 kHz
-        // track at INFO_OUTPUT_FORMAT_CHANGED; the PCM/PTS ratio exposes the real
-        // clock and prevents the classic 4x-speed jump.
-        if (ptsUs >= 0) {
-            const int64_t previousPtsUs = lastPcmPtsUs_.exchange(ptsUs, std::memory_order_acq_rel);
-            if (previousPtsUs >= 0 && ptsUs > previousPtsUs) {
-                const int64_t deltaUs = ptsUs - previousPtsUs;
-                const uint64_t previousFrames = observedPcmFrames_.exchange(static_cast<uint64_t>(frames), std::memory_order_acq_rel);
-                if (previousFrames > 0 && deltaUs >= 5000 && deltaUs <= 250000) {
-                    const double observedRate = (static_cast<double>(previousFrames) * 1000000.0) / static_cast<double>(deltaUs);
-                    const int roundedRate = static_cast<int>(std::llround(observedRate));
-                    if (roundedRate >= 8000 && roundedRate <= 192000) {
-                        const int currentRate = std::max(8000, std::min(192000, sourceRate_));
-                        // Require a close, plausible PCM/PTS match before accepting a
-                        // decoder-rate change. This filters timestamp jitter and vendor
-                        // metadata lies while still allowing a genuine format change.
-                        const double relativeError = std::abs(observedRate - static_cast<double>(currentRate)) / static_cast<double>(currentRate);
-                        if (relativeError <= 0.08) {
-                            if (!decoderPcmRateLocked_) {
-                                sourceRate_ = roundedRate;
-                                decoderPcmRateLocked_ = true;
-                                LOGI("PCM clock locked from decoder PTS: rate=%d observed=%.1f track=%d reported=%d",
-                                     sourceRate_, observedRate, trackSourceRate_, codecReportedRate_);
-                            }
-                        } else {
-                            const double trackError = std::abs(observedRate - static_cast<double>(trackSourceRate_)) / static_cast<double>(trackSourceRate_);
-                            if (!decoderPcmRateLocked_ && trackError <= 0.08) {
-                                // The decoder metadata disagrees, but the actual PCM
-                                // cadence agrees with the track. Keep the track clock.
-                                sourceRate_ = trackSourceRate_;
-                                decoderPcmRateLocked_ = true;
-                                LOGI("PCM clock kept at track rate=%d; observed=%.1f reported=%d",
-                                     sourceRate_, observedRate, codecReportedRate_);
-                            }
-                        }
-                    }
-                }
-            } else {
-                observedPcmFrames_.store(static_cast<uint64_t>(frames), std::memory_order_release);
-            }
-        }
+        // Decoder output format is the authoritative PCM clock. Do not infer or change
+        // sample rate from PTS deltas: a timestamp discontinuity must never change the
+        // audio clock mid-song (that can turn 48 kHz PCM into an audible 4x speed jump).
 
-        if (!decoderPcmRateLocked_) {
-            sourceRate_ = trackSourceRate_;
-        }
         std::vector<float> resampled;
         const size_t outFrames = resample(stereo, frames, resampled);
         if (!outFrames) return;
@@ -543,13 +484,7 @@ private:
                 processed = resampled;
             }
         }
-        const size_t written = ring_.write(processed.data(), outFrames);
-        if (written > 0) {
-            firstPcmSeen_.store(true, std::memory_order_release);
-            audioReady_.store(true, std::memory_order_release);
-            initDone_.store(true, std::memory_order_release);
-            initCv_.notify_all();
-        }
+        ring_.write(processed.data(), outFrames);
         // Position is derived from frames actually consumed by Oboe, not decoder PTS.
         // Decoder PTS can run ahead by the entire PCM buffer. Prime the base once from the
         // first decoded timestamp so a seek lands on the decoder's actual sync position.
@@ -579,29 +514,10 @@ private:
 
     void decodeLoop() {
         if (!openCodec()) {
-            // Android MediaCodec/Extractor is the primary path. FFmpeg is a real native
-            // fallback for codecs/container/HTTP cases the platform path cannot open.
-            closeStream();
-            closeCodec();
-            std::string fallbackUrl;
-            { std::lock_guard<std::mutex> lock(stateMutex_); fallbackUrl = url_; }
-            if (!fallback_) fallback_ = std::make_unique<AudioDecoder>();
-            const int64_t start = seekMs_.load(std::memory_order_acquire);
-            if (fallback_->openUrl(fallbackUrl, start)) {
-                usingFallback_.store(true, std::memory_order_release);
-                fallback_->setVolume(volume_.load(std::memory_order_acquire));
-                playing_.store(true, std::memory_order_release);
-                hasMedia_.store(true, std::memory_order_release);
-                initDone_.store(true, std::memory_order_release);
-                initCv_.notify_all();
-                while (!stopRequested_.load(std::memory_order_acquire) && fallback_->isPlaying()) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                }
-                playing_.store(false, std::memory_order_release);
-                hasMedia_.store(false, std::memory_order_release);
-                return;
-            }
-            LOGE("Native MediaCodec and FFmpeg fallback both failed");
+            // Native mode is intentionally self-contained: MediaCodec/MediaExtractor are
+            // the decoder path and Oboe is the PCM output path. Do not silently switch
+            // engines here; the Kotlin layer must keep the user's selected engine.
+            LOGE("Glossy native decoder/output initialization failed");
             error_.store(true, std::memory_order_release);
             playing_.store(false, std::memory_order_release);
             initDone_.store(true, std::memory_order_release);
@@ -609,9 +525,10 @@ private:
             return;
         }
         playing_.store(true, std::memory_order_release);
+        initDone_.store(true, std::memory_order_release);
+        initCv_.notify_all();
         if (seekRequested_.load(std::memory_order_acquire)) performSeek();
 
-        const auto decodeStart = std::chrono::steady_clock::now();
         AMediaCodecBufferInfo info{};
         bool inputDone = false;
         while (!stopRequested_.load(std::memory_order_acquire)) {
@@ -620,46 +537,6 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 continue;
             }
-
-            // MediaCodec can sometimes configure successfully but never deliver usable
-            // PCM for a particular stream/device. ExoPlayer has decoder fallback/retry
-            // machinery; our native path needs an equivalent escape hatch. If input has
-            // been submitted but no PCM arrives for several seconds, leave the codec path
-            // and let the real FFmpeg fallback take over.
-            if (!firstPcmSeen_.load(std::memory_order_acquire) &&
-                inputSubmitted_.load(std::memory_order_acquire) &&
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - decodeStart).count() >= 4000) {
-                LOGE("MediaCodec produced no PCM within startup window; switching to FFmpeg fallback");
-                const int64_t fallbackStart = position();
-                closeStream();
-                closeCodec();
-                std::string fallbackUrl;
-                { std::lock_guard<std::mutex> lock(stateMutex_); fallbackUrl = url_; }
-                if (!fallback_) fallback_ = std::make_unique<AudioDecoder>();
-                if (fallback_->openUrl(fallbackUrl, fallbackStart)) {
-                    usingFallback_.store(true, std::memory_order_release);
-                    fallback_->setVolume(volume_.load(std::memory_order_acquire));
-                    playing_.store(true, std::memory_order_release);
-                    hasMedia_.store(true, std::memory_order_release);
-                    audioReady_.store(true, std::memory_order_release);
-                    initDone_.store(true, std::memory_order_release);
-                    initCv_.notify_all();
-                    while (!stopRequested_.load(std::memory_order_acquire) && fallback_->isPlaying()) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                    }
-                    playing_.store(false, std::memory_order_release);
-                    hasMedia_.store(false, std::memory_order_release);
-                    return;
-                }
-                LOGE("FFmpeg fallback failed after MediaCodec startup timeout");
-                error_.store(true, std::memory_order_release);
-                playing_.store(false, std::memory_order_release);
-                initDone_.store(true, std::memory_order_release);
-                initCv_.notify_all();
-                return;
-            }
-
             if (!inputDone) {
                 const ssize_t index = AMediaCodec_dequeueInputBuffer(codec_, 10000);
                 if (index >= 0) {
@@ -672,7 +549,6 @@ private:
                     } else {
                         const int64_t pts = AMediaExtractor_getSampleTime(extractor_);
                         AMediaCodec_queueInputBuffer(codec_, index, 0, sampleSize, std::max<int64_t>(0, pts), 0);
-                        inputSubmitted_.store(true, std::memory_order_release);
                         AMediaExtractor_advance(extractor_);
                     }
                 }
@@ -697,39 +573,41 @@ private:
                 if (fmt) {
                     int32_t outputRate = sourceRate_;
                     int32_t outputChannels = sourceChannels_;
+                    int32_t outputEncoding = pcmEncoding_;
                     AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_SAMPLE_RATE, &outputRate);
                     AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &outputChannels);
-                    int32_t enc = pcmEncoding_;
-                    AMediaFormat_getInt32(fmt, kPcmEncodingKey, &enc);
-                    pcmEncoding_ = enc;
+                    AMediaFormat_getInt32(fmt, kPcmEncodingKey, &outputEncoding);
 
-                    codecReportedRate_ = outputRate > 0 ? outputRate : codecReportedRate_;
-                    LOGI("MediaCodec output format: reportedRate=%d trackRate=%d channels=%d pcmEncoding=%d",
-                         outputRate, trackSourceRate_, outputChannels, enc);
+                    const int oldRate = sourceRate_;
+                    const int oldChannels = sourceChannels_;
+                    const int oldEncoding = pcmEncoding_;
 
-                    // IMPORTANT: INFO_OUTPUT_FORMAT_CHANGED is metadata, not proof that
-                    // the PCM clock changed. Some Android vendor decoders report the device
-                    // output rate here (e.g. 192 kHz) for a 48 kHz compressed track. Do not
-                    // clear the audio ring or reset the resampler on a metadata-only event;
-                    // that can create both a gap and a 4x-speed transition. The actual PCM
-                    // cadence is validated in processDecoded() against decoder PTS.
-                    sourceRate_ = decoderPcmRateLocked_ ? sourceRate_ : trackSourceRate_;
-                    if (outputChannels >= 1 && outputChannels <= 2 && outputChannels != sourceChannels_) {
-                        // Channel layout changes are much less common and are only accepted
-                        // before the PCM clock is locked. A late vendor metadata flip must not
-                        // reinterpret already-decoded PCM.
-                        if (!firstPcmSeen_.load(std::memory_order_acquire)) {
+                    // MediaCodec's first output format describes the actual PCM that follows.
+                    // Lock the decoder clock to that format for the lifetime of this stream.
+                    // A later format notification is not allowed to silently change the sample
+                    // rate mid-song; doing so can create the exact sudden 2x/4x speed jump we
+                    // are protecting against. A real format change requires a new decoder
+                    // session, not an in-place clock mutation.
+                    const bool validRate = outputRate >= 8000 && outputRate <= 192000;
+                    const bool validChannels = outputChannels >= 1 && outputChannels <= 2;
+                    const bool validEncoding = outputEncoding == kPcm16Encoding || outputEncoding == 3 || outputEncoding == kPcmFloatEncoding;
+                    if (validRate && validChannels && validEncoding) {
+                        if (!outputFormatLocked_) {
+                            sourceRate_ = outputRate;
                             sourceChannels_ = outputChannels;
-                        } else {
-                            LOGE("Ignoring late MediaCodec channel metadata change: old=%d new=%d",
-                                 sourceChannels_, outputChannels);
+                            pcmEncoding_ = outputEncoding;
+                            outputFormatLocked_ = true;
+                            resetResampler();
+                            resetDsp();
+                            LOGI("MediaCodec PCM format locked: track=%dHz/%dch -> output=%dHz/%dch/enc=%d, oboe=%dHz",
+                                 trackSourceRate_, oldChannels, sourceRate_, sourceChannels_, pcmEncoding_,
+                                 outputRate_.load(std::memory_order_acquire));
+                        } else if (outputRate != sourceRate_ || outputChannels != sourceChannels_ || outputEncoding != pcmEncoding_) {
+                            LOGE("Ignoring mid-stream PCM format change: locked=%dHz/%dch/enc=%d reported=%dHz/%dch/enc=%d",
+                                 sourceRate_, sourceChannels_, pcmEncoding_, outputRate, outputChannels, outputEncoding);
                         }
-                    }
-                    if (enc == kPcm16Encoding || enc == kPcmFloatEncoding || enc == 3) {
-                        if (!firstPcmSeen_.load(std::memory_order_acquire)) pcmEncoding_ = enc;
-                        else if (enc != pcmEncoding_) {
-                            LOGE("Ignoring late MediaCodec PCM encoding change: old=%d new=%d", pcmEncoding_, enc);
-                        }
+                    } else {
+                        LOGE("Invalid MediaCodec PCM format: %dHz/%dch/enc=%d", outputRate, outputChannels, outputEncoding);
                     }
                     AMediaFormat_delete(fmt);
                 }
@@ -752,18 +630,16 @@ private:
     AMediaDataSource* dataSource_ = nullptr;
     bool dataSourceClosed_ = false;
     std::shared_ptr<oboe::AudioStream> stream_;
-    std::unique_ptr<AudioDecoder> fallback_;
     std::thread worker_;
     FloatRing ring_;
     void* dsp_ = nullptr;
 
     int sourceRate_ = 48000;
     int trackSourceRate_ = 48000;
-    int codecReportedRate_ = 0;
-    bool decoderPcmRateLocked_ = false;
     std::atomic<int> outputRate_{kOutputRate};
     int sourceChannels_ = 2;
     int pcmEncoding_ = kPcm16Encoding;
+    bool outputFormatLocked_ = false;
     bool dspDirty_ = false;
     bool havePrev_ = false;
     float prevL_ = 0.0f, prevR_ = 0.0f;
@@ -776,18 +652,12 @@ private:
     std::atomic<bool> hasMedia_{false};
     std::atomic<bool> error_{false};
     std::atomic<bool> initDone_{false};
-    std::atomic<bool> audioReady_{false};
-    std::atomic<bool> firstPcmSeen_{false};
-    std::atomic<bool> inputSubmitted_{false};
-    std::atomic<int64_t> lastPcmPtsUs_{-1};
-    std::atomic<uint64_t> observedPcmFrames_{0};
     std::atomic<uint64_t> underruns_{0};
     std::atomic<int64_t> seekMs_{0};
     std::atomic<int64_t> positionMs_{0};
     std::atomic<int64_t> playbackBaseMs_{0};
     std::atomic<uint64_t> renderedFrames_{0};
     std::atomic<bool> positionPrimed_{false};
-    std::atomic<bool> usingFallback_{false};
     std::atomic<int64_t> durationMs_{0};
     std::atomic<float> volume_{1.0f};
 };
