@@ -116,6 +116,19 @@ class SoundFxViewModel
         fun setVirtualizerEnabled(enabled: Boolean) = launch { repository.setVirtualizerEnabled(enabled) }
 
         fun setVirtualizerStrength(strength: Int) = launch { repository.setVirtualizerStrength(strength) }
+        fun setSpatialEnabled(enabled: Boolean) = launch { repository.setSpatialEnabled(enabled) }
+        fun setSpatialStrength(strength: Int) = launch { repository.setSpatialStrength(strength) }
+        fun setCrossfeedEnabled(enabled: Boolean) = launch { repository.setCrossfeedEnabled(enabled) }
+        fun setCrossfeedStrength(strength: Int) = launch { repository.setCrossfeedStrength(strength) }
+        fun setReverbEnabled(enabled: Boolean) = launch { repository.setReverbEnabled(enabled) }
+        fun setReverbMix(mix: Int) = launch { repository.setReverbMix(mix) }
+
+        fun setClarityEnabled(enabled: Boolean) = launch { repository.setClarityEnabled(enabled) }
+        fun setClarityStrength(strength: Int) = launch { repository.setClarityStrength(strength) }
+        fun setCompressorEnabled(enabled: Boolean) = launch { repository.setCompressorEnabled(enabled) }
+        fun setCompressorStrength(strength: Int) = launch { repository.setCompressorStrength(strength) }
+        fun setLimiterEnabled(enabled: Boolean) = launch { repository.setLimiterEnabled(enabled) }
+        fun setLimiterStrength(strength: Int) = launch { repository.setLimiterStrength(strength) }
 
         fun setAutoHeadroomEnabled(enabled: Boolean) = launch { repository.setAutoHeadroomEnabled(enabled) }
 
@@ -134,6 +147,10 @@ class SoundFxViewModel
                 repository.setBassBoostStrength(com.jay.glossy.eq.soundfx.SoundFxSettings.MAX_EFFECT_STRENGTH)
                 repository.setVirtualizerEnabled(true)
                 repository.setVirtualizerStrength(com.jay.glossy.eq.soundfx.SoundFxSettings.MAX_EFFECT_STRENGTH)
+                repository.setCompressorEnabled(true)
+                repository.setCompressorStrength(650)
+                repository.setLimiterEnabled(true)
+                repository.setLimiterStrength(800)
             }
         }
 

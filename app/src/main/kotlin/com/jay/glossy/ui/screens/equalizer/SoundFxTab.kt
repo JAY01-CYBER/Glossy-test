@@ -410,6 +410,90 @@ fun SoundFxTab(
                     }
                 }
 
+                // Spatial processing
+                item {
+                    SectionCard(title = "Spatial & Immersion") {
+                        SwitchHeaderRow(
+                            title = "Spatial Width",
+                            checked = config.settings.spatialEnabled,
+                            onCheckedChange = { viewModel.setSpatialEnabled(it) },
+                        )
+                        StrengthSliderRow(
+                            value = config.settings.spatialStrength,
+                            enabled = config.settings.spatialEnabled,
+                            onCommit = { viewModel.setSpatialStrength(it) },
+                            modifier = Modifier.padding(bottom = 4.dp),
+                        )
+                        SwitchHeaderRow(
+                            title = "Crossfeed",
+                            checked = config.settings.crossfeedEnabled,
+                            onCheckedChange = { viewModel.setCrossfeedEnabled(it) },
+                        )
+                        StrengthSliderRow(
+                            value = config.settings.crossfeedStrength,
+                            enabled = config.settings.crossfeedEnabled,
+                            onCommit = { viewModel.setCrossfeedStrength(it) },
+                            modifier = Modifier.padding(bottom = 4.dp),
+                        )
+                        SwitchHeaderRow(
+                            title = "Reverb",
+                            checked = config.settings.reverbEnabled,
+                            onCheckedChange = { viewModel.setReverbEnabled(it) },
+                        )
+                        StrengthSliderRow(
+                            value = (config.settings.reverbMix * 1000 / 350).coerceIn(0, 1000),
+                            enabled = config.settings.reverbEnabled,
+                            onCommit = { viewModel.setReverbMix((it * 350) / 1000) },
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                    }
+                }
+
+                // Clarity / presence
+                item {
+                    SectionCard(title = "Clarity & Presence") {
+                        SwitchHeaderRow(
+                            title = "Clarity",
+                            checked = config.settings.clarityEnabled,
+                            onCheckedChange = { viewModel.setClarityEnabled(it) },
+                        )
+                        StrengthSliderRow(
+                            value = config.settings.clarityStrength,
+                            enabled = config.settings.clarityEnabled,
+                            onCommit = { viewModel.setClarityStrength(it) },
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                    }
+                }
+
+                // Dynamics
+                item {
+                    SectionCard(title = "Dynamics & Protection") {
+                        SwitchHeaderRow(
+                            title = "Dynamic Compressor",
+                            checked = config.settings.compressorEnabled,
+                            onCheckedChange = { viewModel.setCompressorEnabled(it) },
+                        )
+                        StrengthSliderRow(
+                            value = config.settings.compressorStrength,
+                            enabled = config.settings.compressorEnabled,
+                            onCommit = { viewModel.setCompressorStrength(it) },
+                            modifier = Modifier.padding(bottom = 4.dp),
+                        )
+                        SwitchHeaderRow(
+                            title = "Peak Limiter",
+                            checked = config.settings.limiterEnabled,
+                            onCheckedChange = { viewModel.setLimiterEnabled(it) },
+                        )
+                        StrengthSliderRow(
+                            value = config.settings.limiterStrength,
+                            enabled = config.settings.limiterEnabled,
+                            onCommit = { viewModel.setLimiterStrength(it) },
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                    }
+                }
+
                 // Auto headroom
                 item {
                     SectionCard {
@@ -428,7 +512,7 @@ fun SoundFxTab(
 
                 // Profiles
                 item {
-                    SectionCard(title = stringResource(R.string.sound_fx_profiles)) {
+                    SectionCard(title = "Tuning / Headphone Profiles") {
                         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
