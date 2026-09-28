@@ -282,7 +282,10 @@ private:
         builder.setDirection(oboe::Direction::Output)
             ->setFormat(oboe::AudioFormat::Float)
             ->setChannelCount(kOutputChannels)
-            ->setSampleRate(kOutputRate)
+            // Let the shared output negotiate the device/native rate. The decoder path
+            // explicitly resamples into this actual rate, so we never assume 48 kHz while
+            // the AudioStream is really running at 96/192 kHz.
+            ->setSampleRate(0)
             ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
             ->setSharingMode(oboe::SharingMode::Shared)
             ->setUsage(oboe::Usage::Media)
