@@ -19,6 +19,11 @@ class NativeAudioProcessor : AudioProcessor {
     private var channelCount = 0
     private var encoding = C.ENCODING_INVALID
     private var active = false
+    @Volatile private var routingEnabled = false
+
+    fun setRoutingEnabled(enabled: Boolean) {
+        routingEnabled = enabled
+    }
     private var inputEnded = false
     private var outputBuffer: ByteBuffer = EMPTY_BUFFER
     private var appliedDspVersion = -1L
@@ -56,26 +61,44 @@ class NativeAudioProcessor : AudioProcessor {
         val bytes = inputBuffer.remaining()
         if (bytes == 0) return
 
+        val out = replaceOutputBuffer(bytes)
+        val input = inputBuffer.slice().order(ByteOrder.nativeOrder())
+
+        if (!routingEnabled || !active) {
+            out.put(input)
+            out.flip()
+            inputBuffer.position(inputBuffer.limit())
+            outputBuffer = out
+            return
+        }
+
         try {
             syncDspSettings()
         } catch (_: UnsatisfiedLinkError) {
-            active = false
+            routingEnabled = false
+            out.put(input)
+            out.flip()
+            inputBuffer.position(inputBuffer.limit())
+            outputBuffer = out
             return
         }
-        val out = replaceOutputBuffer(bytes)
-        // JNI sees the slice from the current input position, then we fully consume
-        // the Media3 input buffer as required by AudioProcessor.
-        val input = inputBuffer.slice().order(ByteOrder.nativeOrder())
+
         val written = try {
             engine.process(input, out, bytes)
         } catch (_: UnsatisfiedLinkError) {
-            active = false
-            return
+            routingEnabled = false
+            0
         }
         inputBuffer.position(inputBuffer.limit())
         if (written > 0) {
             out.position(0)
             out.limit(written)
+            outputBuffer = out
+        } else {
+            // Never turn a native DSP failure into silence. Preserve the decoded PCM.
+            out.clear()
+            out.put(input)
+            out.flip()
             outputBuffer = out
         }
     }
