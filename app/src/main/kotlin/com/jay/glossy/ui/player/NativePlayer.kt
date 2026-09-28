@@ -36,6 +36,9 @@ class NativePlayer : AutoCloseable {
                 settings.spatialEnabled, settings.spatialStrength,
                 settings.crossfeedEnabled, settings.crossfeedStrength,
                 settings.reverbEnabled, settings.reverbMix,
+                settings.clarityEnabled, settings.clarityStrength,
+                settings.compressorEnabled, settings.compressorStrength,
+                settings.limiterEnabled, settings.limiterStrength,
                 settings.outputGainEnabled, settings.outputGainMb,
                 settings.autoHeadroomEnabled, settings.bypass,
             )
@@ -64,7 +67,7 @@ class NativePlayer : AutoCloseable {
     private external fun nWaitUntilReady(handle: Long, timeoutMs: Int): Boolean
     private external fun nIsPlaying(handle: Long): Boolean
     private external fun nSetVolume(handle: Long, volume: Float)
-    private external fun nSetDsp(handle: Long, enabled: Boolean, bandsMb: IntArray, bassEnabled: Boolean, bassStrength: Int, virtualizerEnabled: Boolean, virtualizerStrength: Int, spatialEnabled: Boolean, spatialStrength: Int, crossfeedEnabled: Boolean, crossfeedStrength: Int, reverbEnabled: Boolean, reverbMix: Int, outputGainEnabled: Boolean, outputGainMb: Int, autoHeadroom: Boolean, bypass: Boolean)
+    private external fun nSetDsp(handle: Long, enabled: Boolean, bandsMb: IntArray, bassEnabled: Boolean, bassStrength: Int, virtualizerEnabled: Boolean, virtualizerStrength: Int, spatialEnabled: Boolean, spatialStrength: Int, crossfeedEnabled: Boolean, crossfeedStrength: Int, reverbEnabled: Boolean, reverbMix: Int, clarityEnabled: Boolean, clarityStrength: Int, compressorEnabled: Boolean, compressorStrength: Int, limiterEnabled: Boolean, limiterStrength: Int, outputGainEnabled: Boolean, outputGainMb: Int, autoHeadroom: Boolean, bypass: Boolean)
     private external fun nRelease(handle: Long)
 
     companion object {
