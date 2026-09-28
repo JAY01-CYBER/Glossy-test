@@ -25,6 +25,12 @@ import com.jay.glossy.constants.SoundFxSpatialEnabledKey
 import com.jay.glossy.constants.SoundFxSpatialStrengthKey
 import com.jay.glossy.constants.SoundFxCrossfeedEnabledKey
 import com.jay.glossy.constants.SoundFxCrossfeedStrengthKey
+import com.jay.glossy.constants.SoundFxClarityEnabledKey
+import com.jay.glossy.constants.SoundFxClarityStrengthKey
+import com.jay.glossy.constants.SoundFxCompressorEnabledKey
+import com.jay.glossy.constants.SoundFxCompressorStrengthKey
+import com.jay.glossy.constants.SoundFxLimiterEnabledKey
+import com.jay.glossy.constants.SoundFxLimiterStrengthKey
 import com.jay.glossy.constants.SoundFxReverbEnabledKey
 import com.jay.glossy.constants.SoundFxReverbMixKey
 import com.jay.glossy.utils.dataStore
@@ -91,6 +97,18 @@ class SoundFxRepository
         suspend fun setVirtualizerStrength(strength: Int) =
             editManual { it[SoundFxVirtualizerStrengthKey] = strength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH) }
 
+        suspend fun setClarityEnabled(enabled: Boolean) = editManual { it[SoundFxClarityEnabledKey] = enabled }
+
+        suspend fun setClarityStrength(strength: Int) = editManual { it[SoundFxClarityStrengthKey] = strength.coerceIn(SoundFxSettings.MAX_EFFECT_STRENGTH) }
+
+        suspend fun setCompressorEnabled(enabled: Boolean) = editManual { it[SoundFxCompressorEnabledKey] = enabled }
+
+        suspend fun setCompressorStrength(strength: Int) = editManual { it[SoundFxCompressorStrengthKey] = strength.coerceIn(SoundFxSettings.MAX_EFFECT_STRENGTH) }
+
+        suspend fun setLimiterEnabled(enabled: Boolean) = editManual { it[SoundFxLimiterEnabledKey] = enabled }
+
+        suspend fun setLimiterStrength(strength: Int) = editManual { it[SoundFxLimiterStrengthKey] = strength.coerceIn(SoundFxSettings.MAX_EFFECT_STRENGTH) }
+
         suspend fun setAutoHeadroomEnabled(enabled: Boolean) = editManual { it[SoundFxAutoHeadroomKey] = enabled }
 
         suspend fun setBypass(enabled: Boolean) = edit { it[SoundFxBypassKey] = enabled }
@@ -124,6 +142,12 @@ class SoundFxRepository
                     crossfeedStrength = configuration.settings.crossfeedStrength,
                     reverbEnabled = configuration.settings.reverbEnabled,
                     reverbMix = configuration.settings.reverbMix,
+                    clarityStrength = configuration.settings.clarityStrength,
+                    clarityEnabled = configuration.settings.clarityEnabled,
+                    compressorStrength = configuration.settings.compressorStrength,
+                    compressorEnabled = configuration.settings.compressorEnabled,
+                    limiterStrength = configuration.settings.limiterStrength,
+                    limiterEnabled = configuration.settings.limiterEnabled,
                     autoHeadroomEnabled = configuration.settings.autoHeadroomEnabled,
                 )
             context.dataStore.edit { prefs ->
@@ -191,6 +215,18 @@ class SoundFxRepository
                 prefs[SoundFxBassBoostEnabledKey] = false
                 prefs[SoundFxVirtualizerStrengthKey] = 0
                 prefs[SoundFxVirtualizerEnabledKey] = false
+                prefs[SoundFxSpatialEnabledKey] = false
+                prefs[SoundFxSpatialStrengthKey] = 0
+                prefs[SoundFxCrossfeedEnabledKey] = false
+                prefs[SoundFxCrossfeedStrengthKey] = 0
+                prefs[SoundFxReverbEnabledKey] = false
+                prefs[SoundFxReverbMixKey] = 0
+                prefs[SoundFxClarityEnabledKey] = false
+                prefs[SoundFxClarityStrengthKey] = 0
+                prefs[SoundFxCompressorEnabledKey] = true
+                prefs[SoundFxCompressorStrengthKey] = 350
+                prefs[SoundFxLimiterEnabledKey] = true
+                prefs[SoundFxLimiterStrengthKey] = 650
                 prefs[SoundFxSelectedProfileIdKey] = FLAT_PROFILE_ID
                 prefs[SoundFxBypassKey] = false
             }
@@ -239,6 +275,12 @@ class SoundFxRepository
             prefs[SoundFxCrossfeedEnabledKey] = profile.crossfeedEnabled ?: (profile.crossfeedStrength != 0)
             prefs[SoundFxReverbMixKey] = profile.reverbMix.coerceIn(0, 350)
             prefs[SoundFxReverbEnabledKey] = profile.reverbEnabled ?: (profile.reverbMix != 0)
+            prefs[SoundFxClarityStrengthKey] = profile.clarityStrength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH)
+            prefs[SoundFxClarityEnabledKey] = profile.clarityEnabled ?: (profile.clarityStrength != 0)
+            prefs[SoundFxCompressorStrengthKey] = profile.compressorStrength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH)
+            prefs[SoundFxCompressorEnabledKey] = profile.compressorEnabled ?: true
+            prefs[SoundFxLimiterStrengthKey] = profile.limiterStrength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH)
+            prefs[SoundFxLimiterEnabledKey] = profile.limiterEnabled ?: true
             prefs[SoundFxAutoHeadroomKey] = profile.autoHeadroomEnabled
         }
 

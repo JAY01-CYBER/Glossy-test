@@ -21,6 +21,12 @@ import com.jay.glossy.constants.SoundFxSpatialEnabledKey
 import com.jay.glossy.constants.SoundFxSpatialStrengthKey
 import com.jay.glossy.constants.SoundFxCrossfeedEnabledKey
 import com.jay.glossy.constants.SoundFxCrossfeedStrengthKey
+import com.jay.glossy.constants.SoundFxClarityEnabledKey
+import com.jay.glossy.constants.SoundFxClarityStrengthKey
+import com.jay.glossy.constants.SoundFxCompressorEnabledKey
+import com.jay.glossy.constants.SoundFxCompressorStrengthKey
+import com.jay.glossy.constants.SoundFxLimiterEnabledKey
+import com.jay.glossy.constants.SoundFxLimiterStrengthKey
 import com.jay.glossy.constants.SoundFxReverbEnabledKey
 import com.jay.glossy.constants.SoundFxReverbMixKey
 import kotlinx.serialization.Serializable
@@ -73,6 +79,12 @@ data class SoundFxSettings(
     val crossfeedStrength: Int = 0,
     val reverbEnabled: Boolean = false,
     val reverbMix: Int = 0,
+    val clarityEnabled: Boolean = false,
+    val clarityStrength: Int = 0,
+    val compressorEnabled: Boolean = true,
+    val compressorStrength: Int = 350,
+    val limiterEnabled: Boolean = true,
+    val limiterStrength: Int = 650,
     val autoHeadroomEnabled: Boolean = false,
     val bypass: Boolean = false,
 ) {
@@ -109,6 +121,12 @@ data class SoundFxSettings(
                 crossfeedStrength = (prefs[SoundFxCrossfeedStrengthKey] ?: 0).coerceIn(0, MAX_EFFECT_STRENGTH),
                 reverbEnabled = prefs[SoundFxReverbEnabledKey] ?: false,
                 reverbMix = (prefs[SoundFxReverbMixKey] ?: 0).coerceIn(0, 350),
+                clarityEnabled = prefs[SoundFxClarityEnabledKey] ?: false,
+                clarityStrength = (prefs[SoundFxClarityStrengthKey] ?: 0).coerceIn(0, MAX_EFFECT_STRENGTH),
+                compressorEnabled = prefs[SoundFxCompressorEnabledKey] ?: true,
+                compressorStrength = (prefs[SoundFxCompressorStrengthKey] ?: 350).coerceIn(0, MAX_EFFECT_STRENGTH),
+                limiterEnabled = prefs[SoundFxLimiterEnabledKey] ?: true,
+                limiterStrength = (prefs[SoundFxLimiterStrengthKey] ?: 650).coerceIn(0, MAX_EFFECT_STRENGTH),
                 autoHeadroomEnabled = prefs[SoundFxAutoHeadroomKey] ?: false,
                 bypass = prefs[SoundFxBypassKey] ?: false,
             )
@@ -137,6 +155,12 @@ data class SoundFxProfile(
     val crossfeedEnabled: Boolean? = null,
     val reverbMix: Int = 0,
     val reverbEnabled: Boolean? = null,
+    val clarityStrength: Int = 0,
+    val clarityEnabled: Boolean? = null,
+    val compressorStrength: Int = 350,
+    val compressorEnabled: Boolean? = null,
+    val limiterStrength: Int = 650,
+    val limiterEnabled: Boolean? = null,
     val autoHeadroomEnabled: Boolean = false,
 )
 
