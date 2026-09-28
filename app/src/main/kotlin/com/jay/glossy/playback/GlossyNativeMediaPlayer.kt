@@ -46,14 +46,16 @@ class GlossyNativeMediaPlayer(
             // explicitly tear down the native decoder/Oboe stream as well.
             if (timeline.isEmpty) {
                 service.glossyNativePlayer.stop()
+                service.markNativeStopped()
             }
             invalidateState()
         }
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             if (mediaItem == null) {
                 service.glossyNativePlayer.stop()
+                service.markNativeStopped()
             } else if (playWhenReadyState) {
-                scope.launch { service.startGlossyNativeForCurrentItem() }
+                scope.launch { service.startGlossyNativeForCurrentItem(shouldPlayOnExoFallback = true) }
             }
             invalidateState()
         }
@@ -154,7 +156,7 @@ class GlossyNativeMediaPlayer(
         state = Player.STATE_BUFFERING
         val index = exo().currentMediaItemIndex
         if (index >= 0) {
-            scope.launch { service.startGlossyNativeForCurrentItem() }
+            scope.launch { service.startGlossyNativeForCurrentItem(shouldPlayOnExoFallback = false) }
         }
         invalidateState()
         return Futures.immediateVoidFuture()
@@ -163,7 +165,7 @@ class GlossyNativeMediaPlayer(
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
         playWhenReadyState = playWhenReady
         if (playWhenReady) {
-            scope.launch { service.startGlossyNativeForCurrentItem() }
+            scope.launch { service.startGlossyNativeForCurrentItem(shouldPlayOnExoFallback = true) }
         } else {
             service.glossyNativePlayer.pause()
         }
@@ -174,6 +176,7 @@ class GlossyNativeMediaPlayer(
     override fun handleStop(): ListenableFuture<*> {
         playWhenReadyState = false
         service.glossyNativePlayer.stop()
+        service.markNativeStopped()
         invalidateState()
         return Futures.immediateVoidFuture()
     }
@@ -182,6 +185,7 @@ class GlossyNativeMediaPlayer(
         released = true
         service.player.removeListener(listener)
         service.glossyNativePlayer.stop()
+        service.markNativeStopped()
         return Futures.immediateVoidFuture()
     }
 
@@ -217,7 +221,7 @@ class GlossyNativeMediaPlayer(
         exo().setMediaItems(mediaItems, index, startPositionMs)
         if (mediaItems.isNotEmpty()) {
             state = Player.STATE_BUFFERING
-            if (playWhenReadyState) scope.launch { service.startGlossyNativeForCurrentItem() }
+            if (playWhenReadyState) scope.launch { service.startGlossyNativeForCurrentItem(shouldPlayOnExoFallback = true) }
         }
         invalidateState()
         return Futures.immediateVoidFuture()
@@ -228,7 +232,7 @@ class GlossyNativeMediaPlayer(
         val target = if (mediaItemIndex != C.INDEX_UNSET) mediaItemIndex else p.currentMediaItemIndex
         if (target >= 0 && target != p.currentMediaItemIndex) {
             p.seekTo(target, positionMs.coerceAtLeast(0L))
-            if (playWhenReadyState) scope.launch { service.startGlossyNativeForCurrentItem() }
+            if (playWhenReadyState) scope.launch { service.startGlossyNativeForCurrentItem(shouldPlayOnExoFallback = true) }
         } else {
             val pos = positionMs.coerceAtLeast(0L)
             service.glossyNativePlayer.seekTo(pos)

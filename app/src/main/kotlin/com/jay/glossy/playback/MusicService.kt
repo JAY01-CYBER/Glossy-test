@@ -337,6 +337,7 @@ class MusicService :
     val glossyNativePlayer = NativePlayer()
     @Volatile private var audioEngineMode = AudioEngineMode.EXOPLAYER
     private val nativeStartMutex = Mutex()
+    @Volatile private var nativeMediaId: String? = null
 
     inner class MusicBinder : Binder() {
         val service: MusicService
@@ -409,6 +410,7 @@ class MusicService :
         val position = player.currentPosition.coerceAtLeast(0L)
         val wasPlaying = player.playWhenReady
         audioEngineMode = mode
+        nativeMediaId = null
         glossyNativeMediaPlayer?.let { nativeSessionPlayer ->
             mediaSession?.player = if (mode == AudioEngineMode.GLOSSY_NATIVE) nativeSessionPlayer else player
         }
@@ -425,8 +427,14 @@ class MusicService :
                     glossyNativePlayer.setVolume(calculateEffectiveVolume())
                 } else {
                     Timber.tag(TAG).e("Glossy native engine failed to start after URL refresh retry; reverting to ExoPlayer")
+                    nativeMediaId = null
                     audioEngineMode = AudioEngineMode.EXOPLAYER
+                    if (player.currentMediaItem != null) {
+                        player.seekTo(position)
+                        player.prepare()
+                    }
                     player.volume = calculateEffectiveVolume()
+                    player.playWhenReady = wasPlaying
                     safeDataStoreEdit { it[AudioEngineModeKey] = AudioEngineMode.EXOPLAYER.name }
                 }
             }
@@ -434,6 +442,7 @@ class MusicService :
         } else {
             val positionForFallback = glossyNativePlayer.position().coerceAtLeast(0L)
             glossyNativePlayer.stop()
+            nativeMediaId = null
             if (player.currentMediaItem != null) {
                 player.seekTo(positionForFallback)
                 player.prepare()
@@ -445,38 +454,72 @@ class MusicService :
 
     private suspend fun startGlossyNative(mediaId: String, positionMs: Long): Boolean =
         nativeStartMutex.withLock {
-            // NativePlayer owns a single native decoder/Oboe stream. Serialize starts so
-            // media-transition callbacks cannot race play/stop and tear down the worker.
+            if (audioEngineMode != AudioEngineMode.GLOSSY_NATIVE) return@withLock false
+            val currentId = player.currentMediaItem?.mediaId
+            if (currentId != null && currentId != mediaId) return@withLock false
+
+            // Do not call playUrl() again for the same native item. playUrl() tears down and
+            // recreates the native decoder, so duplicate Media3 callbacks could otherwise make
+            // audible audio jump back to the beginning while the native/UI clock keeps moving.
+            if (nativeMediaId == mediaId) {
+                glossyNativePlayer.resume()
+                return@withLock true
+            }
+
+            if (nativeMediaId != null) {
+                glossyNativePlayer.stop()
+                nativeMediaId = null
+            }
+
             // Stream URLs can expire or be rejected between resolution and native opening.
             for (attempt in 0..1) {
                 if (audioEngineMode != AudioEngineMode.GLOSSY_NATIVE) return@withLock false
-                val currentId = player.currentMediaItem?.mediaId
-                if (currentId != null && currentId != mediaId) return@withLock false
+                val latestId = player.currentMediaItem?.mediaId
+                if (latestId != null && latestId != mediaId) return@withLock false
                 val url = getStreamUrl(mediaId)
                 if (url != null) {
                     glossyNativePlayer.syncDsp()
-                    val started = withContext(Dispatchers.IO) { glossyNativePlayer.playUrl(url, positionMs) }
-                    if (started) return@withLock true
+                    val started = withContext(Dispatchers.IO) {
+                        glossyNativePlayer.playUrl(url, positionMs)
+                    }
+                    if (started) {
+                        // The item is now owned by the native clock. Remember it so later
+                        // prepare/play callbacks become resume operations instead of restarts.
+                        nativeMediaId = mediaId
+                        return@withLock true
+                    }
                 }
                 if (attempt == 0) delay(250)
             }
             false
         }
 
-    suspend fun startGlossyNativeForCurrentItem() {
+    suspend fun startGlossyNativeForCurrentItem(shouldPlayOnExoFallback: Boolean = true) {
         if (audioEngineMode != AudioEngineMode.GLOSSY_NATIVE || !::player.isInitialized) return
         val id = player.currentMediaItem?.mediaId ?: return
-        val position = player.currentPosition.coerceAtLeast(0L)
+        val position = if (nativeMediaId == id) {
+            glossyNativePlayer.position().coerceAtLeast(0L)
+        } else {
+            player.currentPosition.coerceAtLeast(0L)
+        }
         val started = startGlossyNative(id, position)
         if (started) {
             glossyNativePlayer.setVolume(calculateEffectiveVolume())
             player.volume = 0f
         } else {
             Timber.tag(TAG).e("Glossy native engine failed for current item after URL refresh retry; falling back to ExoPlayer")
+            nativeMediaId = null
             audioEngineMode = AudioEngineMode.EXOPLAYER
+            player.seekTo(position)
+            player.prepare()
             player.volume = calculateEffectiveVolume()
+            player.playWhenReady = shouldPlayOnExoFallback
             safeDataStoreEdit { it[AudioEngineModeKey] = AudioEngineMode.EXOPLAYER.name }
         }
+    }
+
+    fun markNativeStopped() {
+        nativeMediaId = null
     }
 
 
