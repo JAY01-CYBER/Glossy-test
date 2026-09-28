@@ -303,8 +303,11 @@ struct Engine {
     std::array<float, kMaxBands> bandGainDb{};
     std::array<Biquad, kMaxBands> eq{};
     Biquad bass;
+    Biquad bassHarmonic;
+    Biquad clarity;
     float limiterGain = 1.0f;
     float compressorEnvelope = 0.0f;
+    float loudnessGain = 1.0f;
     Reverb reverb;
     Spatializer spatializer;
     Crossfeed crossfeed;
@@ -315,6 +318,12 @@ struct Engine {
     int crossfeedStrength = 0;
     bool reverbEnabled = false;
     int reverbMix = 0;
+    bool clarityEnabled = false;
+    int clarityStrength = 0;
+    bool compressorEnabled = true;
+    int compressorStrength = 350;
+    bool limiterEnabled = true;
+    int limiterStrength = 650;
 
     void configure(int fs, int ch, int enc) {
         sampleRate = fs;
@@ -348,13 +357,18 @@ struct Engine {
         rebuild();
     }
 
-    void setEffects(bool spatialEn, int spatialS, bool crossEn, int crossS, bool reverbEn, int reverbS) {
+    void setEffects(bool spatialEn, int spatialS, bool crossEn, int crossS, bool reverbEn, int reverbS, bool clarityEn, int clarityS, bool compressorEn, int compressorS, bool limiterEn, int limiterS) {
         spatialEnabled=spatialEn; spatialStrength=std::clamp(spatialS,0,1000);
         crossfeedEnabled=crossEn; crossfeedStrength=std::clamp(crossS,0,1000);
         reverbEnabled=reverbEn; reverbMix=std::clamp(reverbS,0,350);
+        clarityEnabled=clarityEn; clarityStrength=std::clamp(clarityS,0,1000);
+        compressorEnabled=compressorEn; compressorStrength=std::clamp(compressorS,0,1000);
+        limiterEnabled=limiterEn; limiterStrength=std::clamp(limiterS,0,1000);
         spatializer.set(spatialEn, spatialStrength/1000.0f, 0.0f, 0.0f);
         crossfeed.set(crossEn, crossfeedStrength/1000.0f);
         spatialReverb.set(reverbEn, reverbMix/1000.0f);
+        const float presence = clarityEnabled ? (4.0f * static_cast<float>(clarityStrength) / 1000.0f) : 0.0f;
+        if (sampleRate > 0) makePeaking(clarity, static_cast<float>(sampleRate), 3200.0f, presence, 0.9f);
     }
 
     void rebuild() {
@@ -364,6 +378,12 @@ struct Engine {
         }
         const float bassDb = enabled && bassEnabled ? 10.0f * static_cast<float>(bassStrength) / 1000.0f : 0.0f;
         makeLowShelf(bass, static_cast<float>(sampleRate), 105.0f, bassDb);
+        makePeaking(bassHarmonic, static_cast<float>(sampleRate), 95.0f,
+                    enabled && bassEnabled ? 1.5f * static_cast<float>(bassStrength) / 1000.0f : 0.0f, 0.55f);
+        const float presence = enabled && clarityEnabled
+                ? (4.0f * static_cast<float>(clarityStrength) / 1000.0f)
+                : 0.0f;
+        makePeaking(clarity, static_cast<float>(sampleRate), 3200.0f, presence, 0.9f);
         reverb.configure(sampleRate);
         spatializer.configure();
         spatialReverb.configure(sampleRate);
@@ -373,22 +393,37 @@ struct Engine {
     void resetState() {
         for (auto& f : eq) f.reset();
         bass.reset();
+        bassHarmonic.reset();
+        clarity.reset();
         reverb.reset();
         spatializer.reset();
         crossfeed.reset();
         spatialReverb.reset();
         limiterGain = 1.0f;
-        compressorEnvelope = 0.0f;
+        compressorEnvelope = 1.0f;
+        loudnessGain = 1.0f;
     }
 
     float processSample(float x, int ch, float& other) {
-        if (!enabled) return x;
+        if (!enabled || bypass) return x;
         if (ch == 0) {
             x = bass.processL(x);
             for (auto& f : eq) x = f.processL(x);
+            x = clarity.processL(x);
+            if (bassEnabled && bassStrength > 0) {
+                const float low = bassHarmonic.processL(x);
+                const float drive = 0.025f * static_cast<float>(bassStrength) / 1000.0f;
+                x += std::tanh(low * (1.0f + 3.0f * drive)) * drive;
+            }
         } else {
             x = bass.processR(x);
             for (auto& f : eq) x = f.processR(x);
+            x = clarity.processR(x);
+            if (bassEnabled && bassStrength > 0) {
+                const float low = bassHarmonic.processR(x);
+                const float drive = 0.025f * static_cast<float>(bassStrength) / 1000.0f;
+                x += std::tanh(low * (1.0f + 3.0f * drive)) * drive;
+            }
         }
         const float gainDb = outputGainEnabled ? outputGainDb : 0.0f;
         x *= std::pow(10.0f, gainDb / 20.0f);
@@ -396,7 +431,7 @@ struct Engine {
     }
 
     void processStereo(float& l, float& r) {
-        if (!enabled) return;
+        if (!enabled || bypass) return;
         l = processSample(l, 0, r);
         r = processSample(r, 1, l);
 
@@ -410,12 +445,55 @@ struct Engine {
         if (spatialEnabled) spatializer.process(l, r, sampleRate);
         if (reverbEnabled) spatialReverb.processStereo(l, r);
 
-        // Small safety compressor followed by a peak limiter. This prevents EQ/boost
-        // combinations from turning into hard PCM clipping.
+        // Optional dynamics stage followed by a safety ceiling. Compression is
+        // intentionally conservative so EQ/spatial boosts stay punchy instead of
+        // becoming flat.
         const float peak = std::max(std::abs(l), std::abs(r));
-        const float threshold = 0.92f;
+        if (compressorEnabled && compressorStrength > 0 && peak > 0.00001f) {
+            const float strength = static_cast<float>(compressorStrength) / 1000.0f;
+            const float thresholdDb = -24.0f + 18.0f * strength;
+            const float threshold = std::pow(10.0f, thresholdDb / 20.0f);
+            const float ratio = 1.0f + 3.0f * strength;
+            const float inputDb = 20.0f * std::log10(std::max(peak, 1.0e-6f));
+            float gainDb = 0.0f;
+            if (inputDb > thresholdDb) {
+                const float compressedDb = thresholdDb + (inputDb - thresholdDb) / ratio;
+                gainDb = compressedDb - inputDb;
+            }
+            const float desired = std::pow(10.0f, gainDb / 20.0f);
+            const float attackCoeff = std::exp(-1.0f / (static_cast<float>(sampleRate) * 0.005f));
+            const float releaseCoeff = std::exp(-1.0f / (static_cast<float>(sampleRate) * 0.100f));
+            const float coeff = desired < compressorEnvelope ? attackCoeff : releaseCoeff;
+            compressorEnvelope = coeff * compressorEnvelope + (1.0f - coeff) * desired;
+            l *= compressorEnvelope;
+            r *= compressorEnvelope;
+        } else {
+            compressorEnvelope = 1.0f;
+        }
+
+        if (autoHeadroom) {
+            const float rms = std::sqrt(0.5f * (l * l + r * r));
+            const float targetQuiet = 0.0631f;
+            const float desired = rms > 0.0001f && rms < targetQuiet
+                    ? std::min(1.3335f, targetQuiet / rms)
+                    : 1.0f;
+            const float coeff = desired > loudnessGain
+                    ? std::exp(-1.0f / (static_cast<float>(sampleRate) * 0.035f))
+                    : std::exp(-1.0f / (static_cast<float>(sampleRate) * 0.250f));
+            loudnessGain = coeff * loudnessGain + (1.0f - coeff) * desired;
+            l *= loudnessGain;
+            r *= loudnessGain;
+        } else {
+            loudnessGain = 1.0f;
+        }
+
+        const float peakAfterLoudness = std::max(std::abs(l), std::abs(r));
+        const float limiterStrength01 = static_cast<float>(limiterStrength) / 1000.0f;
+        const float threshold = limiterEnabled
+                ? (0.995f - 0.095f * limiterStrength01)
+                : 0.999f;
         float target = 1.0f;
-        if (peak > threshold) target = threshold / peak;
+        if (limiterEnabled && peakAfterLoudness > threshold) target = threshold / peakAfterLoudness;
         const float attack = std::exp(-1.0f / (static_cast<float>(sampleRate) * 0.002f));
         const float release = std::exp(-1.0f / (static_cast<float>(sampleRate) * 0.080f));
         if (target < limiterGain) limiterGain = attack * limiterGain + (1.0f - attack) * target;
@@ -464,6 +542,9 @@ Java_com_jay_glossy_ui_player_NativeEngine_nSetDsp(JNIEnv* env, jobject, jlong h
                                                     jboolean spatialEnabled, jint spatialStrength,
                                                     jboolean crossfeedEnabled, jint crossfeedStrength,
                                                     jboolean reverbEnabled, jint reverbMix,
+                                                    jboolean clarityEnabled, jint clarityStrength,
+                                                    jboolean compressorEnabled, jint compressorStrength,
+                                                    jboolean limiterEnabled, jint limiterStrength,
                                                     jboolean outputGainEnabled, jint outputGainMb,
                                                     jboolean autoHeadroom, jboolean bypass) {
     auto* e = fromHandle(handle);
@@ -478,7 +559,9 @@ Java_com_jay_glossy_ui_player_NativeEngine_nSetDsp(JNIEnv* env, jobject, jlong h
               virtualizerEnabled == JNI_TRUE, virtualizerStrength,
               outputGainEnabled == JNI_TRUE, outputGainMb, autoHeadroom == JNI_TRUE);
     e->bypass = bypass == JNI_TRUE;
-    e->setEffects(spatialEnabled == JNI_TRUE, spatialStrength, crossfeedEnabled == JNI_TRUE, crossfeedStrength, reverbEnabled == JNI_TRUE, reverbMix);
+    e->setEffects(spatialEnabled == JNI_TRUE, spatialStrength, crossfeedEnabled == JNI_TRUE, crossfeedStrength, reverbEnabled == JNI_TRUE, reverbMix,
+                  clarityEnabled == JNI_TRUE, clarityStrength, compressorEnabled == JNI_TRUE, compressorStrength,
+                  limiterEnabled == JNI_TRUE, limiterStrength);
 }
 
 
