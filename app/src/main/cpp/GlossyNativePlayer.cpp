@@ -15,6 +15,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <memory>
+#include <cmath>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -231,17 +232,50 @@ public:
         }
     }
 
-    oboe::DataCallbackResult onAudioReady(oboe::AudioStream*, void* audioData, int32_t numFrames) override {
-        auto* out = static_cast<float*>(audioData);
+    oboe::DataCallbackResult onAudioReady(oboe::AudioStream* audioStream, void* audioData, int32_t numFrames) override {
         const size_t frames = static_cast<size_t>(std::max<int32_t>(0, numFrames));
-        const size_t got = ring_.read(out, frames);
+        if (frames == 0 || !audioData) return oboe::DataCallbackResult::Continue;
+
+        // The stream format is negotiated by Oboe. Never reinterpret an I16
+        // callback buffer as float (or vice versa): that produces silence or
+        // corrupted output on devices which do not expose FLOAT at the shared
+        // output path. The ring always stays float internally.
+        const auto format = audioStream ? audioStream->getFormat() : oboe::AudioFormat::I16;
+        const float volume = volume_.load(std::memory_order_relaxed);
+        size_t got = 0;
+
+        if (format == oboe::AudioFormat::Float) {
+            auto* out = static_cast<float*>(audioData);
+            got = ring_.read(out, frames);
+            for (size_t i = 0; i < got * 2; ++i) {
+                const float v = std::clamp(out[i] * volume, -1.0f, 1.0f);
+                out[i] = std::isfinite(v) ? v : 0.0f;
+            }
+            for (size_t i = got * 2; i < frames * 2; ++i) out[i] = 0.0f;
+        } else {
+            auto* out = static_cast<int16_t*>(audioData);
+            // Read through a small stack-sized chunk only for the callback's
+            // requested frame count. The ring itself remains allocation-free.
+            // numFrames is normally a few hundred on Android output streams.
+            if (callbackScratch_.size() < frames * 2) {
+                // This should never happen after openStream() sizes the buffer.
+                // Do not allocate from the real-time callback; return silence.
+                std::memset(audioData, 0, frames * 2 * sizeof(int16_t));
+                underruns_.fetch_add(1, std::memory_order_relaxed);
+                return oboe::DataCallbackResult::Continue;
+            }
+            got = ring_.read(callbackScratch_.data(), frames);
+            for (size_t i = 0; i < got * 2; ++i) {
+                const float v = std::clamp(callbackScratch_[i] * volume, -1.0f, 1.0f);
+                callbackScratch_[i] = std::isfinite(v) ? v : 0.0f;
+                out[i] = static_cast<int16_t>(std::lrintf(callbackScratch_[i] * 32767.0f));
+            }
+            for (size_t i = got * 2; i < frames * 2; ++i) out[i] = 0;
+        }
+
         if (got > 0 && !paused_.load(std::memory_order_relaxed)) {
             renderedFrames_.fetch_add(got, std::memory_order_relaxed);
         }
-        const float volume = volume_.load(std::memory_order_relaxed);
-        const size_t total = frames * 2;
-        for (size_t i = got * 2; i < total; ++i) out[i] = 0.0f;
-        for (size_t i = 0; i < got * 2; ++i) out[i] *= volume;
         if (got < frames) underruns_.fetch_add(1, std::memory_order_relaxed);
         return oboe::DataCallbackResult::Continue;
     }
@@ -295,6 +329,9 @@ private:
         }
         outputRate_.store(actualRate, std::memory_order_release);
         LOGI("Oboe output: requested=%d actual=%d channels=%d", kOutputRate, actualRate, actualChannels);
+        const int32_t callbackFrames = std::max<int32_t>(1, stream_->getFramesPerDataCallback());
+        callbackScratch_.resize(static_cast<size_t>(callbackFrames) * kOutputChannels);
+        LOGI("Oboe callback format=%s framesPerCallback=%d", oboe::convertToText(actualFormat), callbackFrames);
         r = stream_->requestStart();
         if (r != oboe::Result::OK) {
             LOGE("Oboe start failed: %s", oboe::convertToText(r));
@@ -630,6 +667,7 @@ private:
     AMediaDataSource* dataSource_ = nullptr;
     bool dataSourceClosed_ = false;
     std::shared_ptr<oboe::AudioStream> stream_;
+    std::vector<float> callbackScratch_;
     std::thread worker_;
     FloatRing ring_;
     void* dsp_ = nullptr;
