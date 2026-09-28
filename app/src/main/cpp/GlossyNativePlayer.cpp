@@ -272,7 +272,7 @@ private:
             ->setChannelCount(kOutputChannels)
             // Let Oboe/AAudio negotiate the device-native rate. We then explicitly
             // resample decoder PCM to the rate actually returned by the stream.
-            ->setSampleRate(0)
+            ->setSampleRate(kOutputRate)
             ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
             ->setSharingMode(oboe::SharingMode::Shared)
             ->setUsage(oboe::Usage::Media)
@@ -286,8 +286,8 @@ private:
         const int actualRate = stream_->getSampleRate();
         const int actualChannels = stream_->getChannelCount();
         const auto actualFormat = stream_->getFormat();
-        LOGI("Oboe output negotiated: requested=default actual=%dHz/%dch format=%s",
-             actualRate, actualChannels, oboe::convertToText(actualFormat));
+        LOGI("Oboe output negotiated: requested=%dHz actual=%dHz/%dch format=%s",
+             kOutputRate, actualRate, actualChannels, oboe::convertToText(actualFormat));
         if (actualRate <= 0 || actualChannels != kOutputChannels) {
             LOGE("Unsupported Oboe output format: rate=%d channels=%d", actualRate, actualChannels);
             closeStream();
