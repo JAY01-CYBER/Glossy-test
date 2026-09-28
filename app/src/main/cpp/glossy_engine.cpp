@@ -703,7 +703,10 @@ extern "C" void glossy_dsp_set(void* handle, bool enabled, const int* bandsMb, i
                                  bool autoHeadroom, bool bypass,
                                  bool spatialEnabled, int spatialStrength,
                                  bool crossfeedEnabled, int crossfeedStrength,
-                                 bool reverbEnabled, int reverbMix) {
+                                 bool reverbEnabled, int reverbMix,
+                                 bool clarityEnabled, int clarityStrength,
+                                 bool compressorEnabled, int compressorStrength,
+                                 bool limiterEnabled, int limiterStrength) {
     auto* e = reinterpret_cast<Engine*>(handle);
     if (!e) return;
     std::vector<int> bands;
