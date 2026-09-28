@@ -15,7 +15,6 @@
 #include <condition_variable>
 #include <cstring>
 #include <memory>
-#include <cmath>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -232,47 +231,55 @@ public:
         }
     }
 
-    oboe::DataCallbackResult onAudioReady(oboe::AudioStream* audioStream, void* audioData, int32_t numFrames) override {
+    oboe::DataCallbackResult onAudioReady(oboe::AudioStream*, void* audioData, int32_t numFrames) override {
         const size_t frames = static_cast<size_t>(std::max<int32_t>(0, numFrames));
-        if (frames == 0 || !audioData) return oboe::DataCallbackResult::Continue;
+        if (!audioData || frames == 0) return oboe::DataCallbackResult::Continue;
 
-        // The stream format is negotiated by Oboe. Never reinterpret an I16
-        // callback buffer as float (or vice versa): that produces silence or
-        // corrupted output on devices which do not expose FLOAT at the shared
-        // output path. The ring always stays float internally.
-        const auto format = audioStream ? audioStream->getFormat() : oboe::AudioFormat::I16;
-        const float volume = volume_.load(std::memory_order_relaxed);
-        size_t got = 0;
-
-        if (format == oboe::AudioFormat::Float) {
-            auto* out = static_cast<float*>(audioData);
-            got = ring_.read(out, frames);
-            for (size_t i = 0; i < got * 2; ++i) {
-                const float v = std::clamp(out[i] * volume, -1.0f, 1.0f);
-                out[i] = std::isfinite(v) ? v : 0.0f;
+        // The ring is always float/stereo. Oboe can negotiate either Float or I16 on
+        // real devices even when Float was requested, so never reinterpret the device
+        // buffer blindly as float. Convert explicitly to the negotiated output format.
+        if (scratch_.size() < frames * 2) {
+            // AAudio normally keeps callback sizes at the negotiated burst size. If a
+            // device violates that contract, render silence rather than allocating on
+            // the realtime callback thread.
+            if (outputFormat_ == oboe::AudioFormat::I16) {
+                std::memset(audioData, 0, frames * static_cast<size_t>(outputChannels_) * sizeof(int16_t));
+            } else {
+                std::memset(audioData, 0, frames * static_cast<size_t>(outputChannels_) * sizeof(float));
             }
-            for (size_t i = got * 2; i < frames * 2; ++i) out[i] = 0.0f;
-        } else {
-            auto* out = static_cast<int16_t*>(audioData);
-            // Read through a small stack-sized chunk only for the callback's
-            // requested frame count. The ring itself remains allocation-free.
-            // numFrames is normally a few hundred on Android output streams.
-            if (callbackScratch_.size() < frames * 2) {
-                // This should never happen after openStream() sizes the buffer.
-                // Do not allocate from the real-time callback; return silence.
-                std::memset(audioData, 0, frames * 2 * sizeof(int16_t));
-                underruns_.fetch_add(1, std::memory_order_relaxed);
-                return oboe::DataCallbackResult::Continue;
-            }
-            got = ring_.read(callbackScratch_.data(), frames);
-            for (size_t i = 0; i < got * 2; ++i) {
-                const float v = std::clamp(callbackScratch_[i] * volume, -1.0f, 1.0f);
-                callbackScratch_[i] = std::isfinite(v) ? v : 0.0f;
-                out[i] = static_cast<int16_t>(std::lrintf(callbackScratch_[i] * 32767.0f));
-            }
-            for (size_t i = got * 2; i < frames * 2; ++i) out[i] = 0;
+            underruns_.fetch_add(1, std::memory_order_relaxed);
+            return oboe::DataCallbackResult::Continue;
         }
+        const size_t got = ring_.read(scratch_.data(), frames);
+        const float volume = volume_.load(std::memory_order_relaxed);
+        const size_t samples = frames * static_cast<size_t>(outputChannels_);
 
+        if (outputFormat_ == oboe::AudioFormat::I16) {
+            auto* out = static_cast<int16_t*>(audioData);
+            for (size_t f = 0; f < frames; ++f) {
+                const float l = f < got ? std::clamp(scratch_[f * 2] * volume, -1.0f, 1.0f) : 0.0f;
+                const float r = f < got ? std::clamp(scratch_[f * 2 + 1] * volume, -1.0f, 1.0f) : 0.0f;
+                if (outputChannels_ == 1) {
+                    out[f] = static_cast<int16_t>(std::lrintf(0.5f * (l + r) * 32767.0f));
+                } else {
+                    out[f * 2] = static_cast<int16_t>(std::lrintf(l * 32767.0f));
+                    out[f * 2 + 1] = static_cast<int16_t>(std::lrintf(r * 32767.0f));
+                }
+            }
+        } else {
+            auto* out = static_cast<float*>(audioData);
+            for (size_t f = 0; f < frames; ++f) {
+                const float l = f < got ? scratch_[f * 2] * volume : 0.0f;
+                const float r = f < got ? scratch_[f * 2 + 1] * volume : 0.0f;
+                if (outputChannels_ == 1) {
+                    out[f] = 0.5f * (l + r);
+                } else {
+                    out[f * 2] = l;
+                    out[f * 2 + 1] = r;
+                }
+            }
+        }
+        (void)samples;
         if (got > 0 && !paused_.load(std::memory_order_relaxed)) {
             renderedFrames_.fetch_add(got, std::memory_order_relaxed);
         }
@@ -322,16 +329,18 @@ private:
         const auto actualFormat = stream_->getFormat();
         LOGI("Oboe output negotiated: requested=%dHz actual=%dHz/%dch format=%s",
              kOutputRate, actualRate, actualChannels, oboe::convertToText(actualFormat));
-        if (actualRate <= 0 || actualChannels != kOutputChannels) {
-            LOGE("Unsupported Oboe output format: rate=%d channels=%d", actualRate, actualChannels);
+        if (actualRate <= 0 || (actualChannels != 1 && actualChannels != 2) ||
+            (actualFormat != oboe::AudioFormat::Float && actualFormat != oboe::AudioFormat::I16)) {
+            LOGE("Unsupported Oboe output format: rate=%d channels=%d format=%s", actualRate, actualChannels, oboe::convertToText(actualFormat));
             closeStream();
             return false;
         }
         outputRate_.store(actualRate, std::memory_order_release);
+        outputChannels_ = actualChannels;
+        outputFormat_ = actualFormat;
+        const int32_t burst = stream_->getFramesPerBurst();
+        scratch_.assign(static_cast<size_t>(std::max<int32_t>(burst > 0 ? burst : 192, 192)) * 2, 0.0f);
         LOGI("Oboe output: requested=%d actual=%d channels=%d", kOutputRate, actualRate, actualChannels);
-        const int32_t callbackFrames = std::max<int32_t>(1, stream_->getFramesPerDataCallback());
-        callbackScratch_.resize(static_cast<size_t>(callbackFrames) * kOutputChannels);
-        LOGI("Oboe callback format=%s framesPerCallback=%d", oboe::convertToText(actualFormat), callbackFrames);
         r = stream_->requestStart();
         if (r != oboe::Result::OK) {
             LOGE("Oboe start failed: %s", oboe::convertToText(r));
@@ -667,7 +676,6 @@ private:
     AMediaDataSource* dataSource_ = nullptr;
     bool dataSourceClosed_ = false;
     std::shared_ptr<oboe::AudioStream> stream_;
-    std::vector<float> callbackScratch_;
     std::thread worker_;
     FloatRing ring_;
     void* dsp_ = nullptr;
@@ -675,6 +683,9 @@ private:
     int sourceRate_ = 48000;
     int trackSourceRate_ = 48000;
     std::atomic<int> outputRate_{kOutputRate};
+    int outputChannels_ = kOutputChannels;
+    oboe::AudioFormat outputFormat_ = oboe::AudioFormat::Float;
+    std::vector<float> scratch_;
     int sourceChannels_ = 2;
     int pcmEncoding_ = kPcm16Encoding;
     bool outputFormatLocked_ = false;
