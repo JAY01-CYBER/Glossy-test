@@ -217,6 +217,12 @@ val SoundFxCrossfeedEnabledKey = booleanPreferencesKey("soundFxCrossfeedEnabled"
 val SoundFxCrossfeedStrengthKey = intPreferencesKey("soundFxCrossfeedStrength")
 val SoundFxReverbEnabledKey = booleanPreferencesKey("soundFxReverbEnabled")
 val SoundFxReverbMixKey = intPreferencesKey("soundFxReverbMix")
+val SoundFxClarityEnabledKey = booleanPreferencesKey("soundFxClarityEnabled")
+val SoundFxClarityStrengthKey = intPreferencesKey("soundFxClarityStrength")
+val SoundFxCompressorEnabledKey = booleanPreferencesKey("soundFxCompressorEnabled")
+val SoundFxCompressorStrengthKey = intPreferencesKey("soundFxCompressorStrength")
+val SoundFxLimiterEnabledKey = booleanPreferencesKey("soundFxLimiterEnabled")
+val SoundFxLimiterStrengthKey = intPreferencesKey("soundFxLimiterStrength")
 
 
 val AutoLoadMoreKey = booleanPreferencesKey("autoLoadMore")
