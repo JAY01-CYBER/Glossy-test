@@ -97,17 +97,32 @@ class SoundFxRepository
         suspend fun setVirtualizerStrength(strength: Int) =
             editManual { it[SoundFxVirtualizerStrengthKey] = strength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH) }
 
+        suspend fun setSpatialEnabled(enabled: Boolean) = editManual { it[SoundFxSpatialEnabledKey] = enabled }
+
+        suspend fun setSpatialStrength(strength: Int) =
+            editManual { it[SoundFxSpatialStrengthKey] = strength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH) }
+
+        suspend fun setCrossfeedEnabled(enabled: Boolean) = editManual { it[SoundFxCrossfeedEnabledKey] = enabled }
+
+        suspend fun setCrossfeedStrength(strength: Int) =
+            editManual { it[SoundFxCrossfeedStrengthKey] = strength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH) }
+
+        suspend fun setReverbEnabled(enabled: Boolean) = editManual { it[SoundFxReverbEnabledKey] = enabled }
+
+        suspend fun setReverbMix(mix: Int) =
+            editManual { it[SoundFxReverbMixKey] = mix.coerceIn(0, 350) }
+
         suspend fun setClarityEnabled(enabled: Boolean) = editManual { it[SoundFxClarityEnabledKey] = enabled }
 
-        suspend fun setClarityStrength(strength: Int) = editManual { it[SoundFxClarityStrengthKey] = strength.coerceIn(SoundFxSettings.MAX_EFFECT_STRENGTH) }
+        suspend fun setClarityStrength(strength: Int) = editManual { it[SoundFxClarityStrengthKey] = strength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH) }
 
         suspend fun setCompressorEnabled(enabled: Boolean) = editManual { it[SoundFxCompressorEnabledKey] = enabled }
 
-        suspend fun setCompressorStrength(strength: Int) = editManual { it[SoundFxCompressorStrengthKey] = strength.coerceIn(SoundFxSettings.MAX_EFFECT_STRENGTH) }
+        suspend fun setCompressorStrength(strength: Int) = editManual { it[SoundFxCompressorStrengthKey] = strength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH) }
 
         suspend fun setLimiterEnabled(enabled: Boolean) = editManual { it[SoundFxLimiterEnabledKey] = enabled }
 
-        suspend fun setLimiterStrength(strength: Int) = editManual { it[SoundFxLimiterStrengthKey] = strength.coerceIn(SoundFxSettings.MAX_EFFECT_STRENGTH) }
+        suspend fun setLimiterStrength(strength: Int) = editManual { it[SoundFxLimiterStrengthKey] = strength.coerceIn(0, SoundFxSettings.MAX_EFFECT_STRENGTH) }
 
         suspend fun setAutoHeadroomEnabled(enabled: Boolean) = editManual { it[SoundFxAutoHeadroomKey] = enabled }
 
