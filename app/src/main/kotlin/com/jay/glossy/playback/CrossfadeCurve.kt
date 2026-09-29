@@ -7,6 +7,8 @@ package com.jay.glossy.playback
 
 import com.jay.glossy.constants.CrossfadeStyle
 import kotlin.math.cos
+import kotlin.math.exp
+import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -18,6 +20,22 @@ data class CrossfadeGains(
 
 object CrossfadeCurve {
     private const val HALF_PI = 1.5707963267948966
+
+    /** DJ filter time curve: subtle at the boundaries, decisive through the middle. */
+    fun djFilterProgress(progress: Float): Float {
+        val p = progress.coerceIn(0f, 1f)
+        val k = 6f
+        val start = 1f / (1f + exp(-k * (0f - 0.5f)))
+        val end = 1f / (1f + exp(-k * (1f - 0.5f)))
+        val value = 1f / (1f + exp(-k * (p - 0.5f)))
+        return ((value - start) / (end - start)).toFloat().coerceIn(0f, 1f)
+    }
+
+    fun exponentialInterpolate(start: Float, end: Float, progress: Float): Float {
+        if (start <= 0f || end <= 0f) return end
+        val p = progress.coerceIn(0f, 1f)
+        return exp(ln(start.toDouble()) + (ln(end.toDouble()) - ln(start.toDouble())) * p.toDouble()).toFloat()
+    }
 
     fun gains(style: CrossfadeStyle, progress: Float): CrossfadeGains {
         val p = progress.coerceIn(0f, 1f)
@@ -87,6 +105,17 @@ object CrossfadeCurve {
                 CrossfadeGains(
                     fadeIn = p.pow(0.35f),
                     fadeOut = (1f - p).pow(1.8f),
+                )
+            }
+
+            // AutoMix uses the equal-power envelope; BPM/key adaptation is applied by the
+            // player orchestration layer, not by the gain curve itself.
+            CrossfadeStyle.AUTO_MIX -> when (p) {
+                0f -> CrossfadeGains(0f, 1f)
+                1f -> CrossfadeGains(1f, 0f)
+                else -> CrossfadeGains(
+                    fadeIn = sin(p * HALF_PI).toFloat(),
+                    fadeOut = cos(p * HALF_PI).toFloat(),
                 )
             }
         }.let { gains ->

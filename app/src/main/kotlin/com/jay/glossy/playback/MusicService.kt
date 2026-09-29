@@ -28,6 +28,7 @@ import android.media.AudioManager
 import android.media.audiofx.AudioEffect
 import com.jay.glossy.playback.audio.VolumeNormalizationAudioProcessor
 import com.jay.glossy.playback.audio.NativeAudioProcessor
+import com.jay.glossy.playback.audio.CrossfadeFilterAudioProcessor
 import com.jay.glossy.ui.player.NativePlayer
 import com.jay.glossy.utils.safeDataStoreEdit
 import android.net.ConnectivityManager
@@ -264,6 +265,11 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import timber.log.Timber
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.exp
+import kotlin.math.ln
+import kotlin.math.sin
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.time.LocalDateTime
@@ -326,6 +332,7 @@ class MusicService :
     private var crossfadeTargetMediaId: String? = null
     private var crossfadeArmed = false
     private var secondaryPrewarmed = false
+    private var crossfadeFilterActive = false
 
     private val secondaryPlayerListener =
         object : Player.Listener {
@@ -519,6 +526,8 @@ class MusicService :
     private var openedAudioEffectSessionId: Int = C.AUDIO_SESSION_ID_UNSET
     private val playerNormalizationProcessors = HashMap<Player, VolumeNormalizationAudioProcessor>()
     private val nativeAudioProcessors = HashMap<Player, NativeAudioProcessor>()
+    private val crossfadeFilterProcessors = HashMap<Player, CrossfadeFilterAudioProcessor>()
+    private val audioFeatureCache = HashMap<String, AudioFeatures>()
 
     private var loudnessSetupJob: Job? = null
     private var loudnessSetupGeneration: Long = 0L
@@ -1160,6 +1169,8 @@ class MusicService :
                 sleepTimer?.let { player.removeListener(it) }
                 playerNormalizationProcessors.remove(player)
                 playerSilenceProcessors.remove(player)
+                crossfadeFilterProcessors.remove(player)
+                nativeAudioProcessors.remove(player)
                 player.release()
 
                 val newPlayer = createExoPlayer()
@@ -1352,6 +1363,7 @@ class MusicService :
             .distinctUntilChanged()
             .collect(scope) { style ->
                 crossfadeStyle = style
+                crossfadeFilterProcessors.values.forEach { it.analysisEnabled = style == CrossfadeStyle.AUTO_MIX }
             }
 
         // Observe and cache common preferences to avoid runBlocking reads in playback callbacks
@@ -1510,6 +1522,15 @@ class MusicService :
         val silenceProcessor = SilenceDetectorAudioProcessor { handleLongSilenceDetected() }
         val playerNativeAudioProcessor = NativeAudioProcessor()
         nativeAudioProcessor = playerNativeAudioProcessor
+        val playerCrossfadeFilterProcessor = CrossfadeFilterAudioProcessor { mediaId, features ->
+            scope.launch(Dispatchers.Main.immediate) {
+                audioFeatureCache[mediaId] = features
+                Timber.tag(TAG).d("AutoMix analysis: $mediaId bpm=${features.bpm}, key=${features.key} ${features.keyScale}")
+                if (crossfadeStyle == CrossfadeStyle.AUTO_MIX && ::player.isInitialized && player.currentMediaItem?.mediaId != null) {
+                    scheduleCrossfade()
+                }
+            }
+        }
 
         // Set initial state — use pre-read prefs when available, otherwise fall back to DataStore
         val useAudioTrackPlaybackParams = if (prefs != null) {
@@ -1526,11 +1547,13 @@ class MusicService :
             }
         }
 
+        playerCrossfadeFilterProcessor.analysisEnabled = crossfadeStyle == CrossfadeStyle.AUTO_MIX
+
         val player =
             ExoPlayer
                 .Builder(this)
                 .setMediaSourceFactory(createMediaSourceFactory())
-                .setRenderersFactory(createRenderersFactory(normalizationProcessor, eqProcessor, silenceProcessor, playerNativeAudioProcessor, useAudioTrackPlaybackParams))
+                .setRenderersFactory(createRenderersFactory(normalizationProcessor, eqProcessor, silenceProcessor, playerNativeAudioProcessor, playerCrossfadeFilterProcessor, useAudioTrackPlaybackParams))
                 .setLoadControl(
                     // Start playback once ~750ms is buffered (media3's default is 1000ms) so first
                     // audio is audible a touch sooner. min/max/after-rebuffer match the media3 1.x
@@ -1557,6 +1580,7 @@ class MusicService :
         playerNormalizationProcessors[player] = normalizationProcessor
         playerSilenceProcessors[player] = silenceProcessor
         nativeAudioProcessors[player] = playerNativeAudioProcessor
+        crossfadeFilterProcessors[player] = playerCrossfadeFilterProcessor
 
         // FIX: Ensure new ExoPlayer instances inherit the selected routing!
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && preferredDeviceId != null) {
@@ -2712,6 +2736,7 @@ class MusicService :
             }
         }
         lastTransitionedMediaId = mediaItem?.mediaId
+        mediaItem?.mediaId?.let { id -> crossfadeFilterProcessors[player]?.analysisMediaId = id }
 
         previousEpisodeId?.let { episodeId ->
             if (previousEpisodePosition > 0) {
@@ -4019,6 +4044,7 @@ class MusicService :
         eqProcessor: CustomEqualizerAudioProcessor,
         silenceProcessor: SilenceDetectorAudioProcessor,
         nativeAudioProcessor: NativeAudioProcessor,
+        crossfadeFilterProcessor: CrossfadeFilterAudioProcessor,
         useAudioTrackPlaybackParams: Boolean,
     ) = object : DefaultRenderersFactory(this) {
         override fun buildAudioRenderers(
@@ -4075,7 +4101,7 @@ class MusicService :
             .setEnableAudioTrackPlaybackParams(useAudioTrackPlaybackParams)
             .setAudioProcessorChain(
                 DefaultAudioSink.DefaultAudioProcessorChain(
-                    arrayOf(normalizationProcessor, eqProcessor, silenceProcessor, nativeAudioProcessor),
+                    arrayOf(normalizationProcessor, eqProcessor, silenceProcessor, crossfadeFilterProcessor, nativeAudioProcessor),
                     SilenceSkippingAudioProcessor(2_000_000, 20_000, 256),
                     SonicAudioProcessor(),
                 ),
@@ -4342,6 +4368,8 @@ class MusicService :
         sleepTimer?.let { player.removeListener(it) }
         playerNormalizationProcessors.remove(player)
         playerSilenceProcessors.remove(player)
+        crossfadeFilterProcessors.remove(player)
+        nativeAudioProcessors.remove(player)
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controllerFuture = null
         player.release()
@@ -4828,19 +4856,44 @@ class MusicService :
 
         // A previous preparation belongs to the old track. Never let a stale secondary
         // player survive a seek/queue/timeline change.
-        if (!isCrossfading) {
+        val existingTarget = crossfadeTargetMediaId
+        val currentMediaId = player.currentMediaItem?.mediaId
+        if (!crossfadeEnabled || crossfadeDuration <= 0f || player.duration == C.TIME_UNSET) {
+            if (!isCrossfading) releaseSecondaryPlayer()
+            crossfadeTargetMediaId = null
+            return
+        }
+        if (!isCrossfading && secondaryPlayer != null && existingTarget != currentMediaId) {
             releaseSecondaryPlayer()
         }
         crossfadeTargetMediaId = null
 
-        val mediaCrossfadeDuration = crossfadeDuration.toLong()
+        val targetIndexForDuration = if (player.repeatMode == REPEAT_MODE_ONE) player.currentMediaItemIndex else player.nextMediaItemIndex
+        if (targetIndexForDuration == C.INDEX_UNSET) return
+        val autoDuration = if (crossfadeStyle == CrossfadeStyle.AUTO_MIX) {
+            resolveAutoCrossfadeDurationMs(
+                player.currentMediaItem?.mediaId.orEmpty(),
+                player.getMediaItemAt(targetIndexForDuration).mediaId,
+            )
+        } else 0L
+        val mediaCrossfadeDuration = if (crossfadeStyle == CrossfadeStyle.AUTO_MIX) autoDuration else crossfadeDuration.toLong()
 
-        if (!crossfadeEnabled || crossfadeDuration <= 0f || player.duration == C.TIME_UNSET || player.duration <= mediaCrossfadeDuration) return
+        if (player.duration <= mediaCrossfadeDuration) return
         if (!player.hasNextMediaItem() && player.repeatMode != REPEAT_MODE_ONE) return
 
         val triggerTime = player.duration - mediaCrossfadeDuration
         val mediaTimeRemaining = triggerTime - player.currentPosition
-        if (mediaTimeRemaining <= 0) return
+        if (mediaTimeRemaining <= 0) {
+            // AutoMix metadata may arrive after the original fallback 5s schedule was created.
+            // If the adaptive window is already overlapping the current position, start now and
+            // let performCrossfadeSwap clamp the audible duration to the remaining track time.
+            if (crossfadeStyle == CrossfadeStyle.AUTO_MIX && player.isPlaying && secondaryPlayer != null) {
+                crossfadeTargetMediaId = currentMediaId
+                crossfadeArmed = true
+                tryStartCrossfade()
+            }
+            return
+        }
 
         val targetMediaId = player.currentMediaItem?.mediaId ?: return
         val targetIndex =
@@ -4852,13 +4905,22 @@ class MusicService :
         if (targetIndex == C.INDEX_UNSET) return
 
         crossfadeTargetMediaId = targetMediaId
-        secondaryPrewarmed = false
+        crossfadeArmed = false
+        if (!isCrossfading && secondaryPlayer == null && player.isPlaying) {
+            // SimpMusic-style persistent precache: resolve and buffer the next track while
+            // the current track is still comfortably away from its transition point.
+            prepareSecondaryPlayer(targetIndex)
+        }
         // Do not wait until the fade point to start network/decoder preparation. On slower
         // devices the old implementation did prepare()+playWhenReady=true and immediately
         // swapped players, which made the new player's fade-in run while it was still silent.
         // Give the secondary player a small warm-up window, while keeping the configured
         // crossfade duration unchanged.
-        val warmupLeadMs = minOf(3000L, maxOf(1000L, mediaCrossfadeDuration / 2L))
+        val warmupLeadMs = if (crossfadeStyle == CrossfadeStyle.AUTO_MIX) {
+            maxOf(8000L, mediaCrossfadeDuration)
+        } else {
+            minOf(3000L, maxOf(1000L, mediaCrossfadeDuration / 2L))
+        }
         val prepareTime = maxOf(0L, triggerTime - warmupLeadMs)
 
         crossfadePrepareMessage = player.createMessage { _, _ ->
@@ -4904,6 +4966,7 @@ class MusicService :
         nativeAudioProcessor = nativeAudioProcessors[currentPlayer] ?: nativeAudioProcessor
         _playerFlow.value = currentPlayer
         secPlayer.addListener(secondaryPlayerListener)
+        crossfadeFilterProcessors[secPlayer]?.analysisMediaId = currentPlayer.getMediaItemAt(targetIndex).mediaId
 
         val itemCount = currentPlayer.mediaItemCount
         val items = mutableListOf<MediaItem>()
@@ -4914,6 +4977,11 @@ class MusicService :
         secPlayer.setMediaItems(items)
         secPlayer.seekTo(targetIndex, 0)
         secPlayer.volume = 0f
+        crossfadeFilterProcessors[secPlayer]?.apply {
+            enabled = false
+            cutoffFrequencyHz = 20_000f
+            filterType = CrossfadeFilterAudioProcessor.FilterType.LOW_PASS
+        }
         secPlayer.setPlaybackParameters(currentPlayer.playbackParameters)
         secPlayer.repeatMode = currentPlayer.repeatMode
         secPlayer.shuffleModeEnabled = currentPlayer.shuffleModeEnabled
@@ -4951,7 +5019,7 @@ class MusicService :
         secPlayer.play()
 
         scope.launch {
-            delay(120L)
+            delay(if (crossfadeStyle == CrossfadeStyle.AUTO_MIX) 8_500L else 120L)
             if (!isActive) return@launch
             if (secondaryPlayer === secPlayer &&
                 !isCrossfading &&
@@ -4959,6 +5027,7 @@ class MusicService :
                 crossfadeTargetMediaId == player.currentMediaItem?.mediaId
             ) {
                 secPlayer.pause()
+                runCatching { secPlayer.seekTo(0L) }
             }
         }
     }
@@ -4991,6 +5060,94 @@ class MusicService :
         performCrossfadeSwap()
     }
 
+    private fun resolveAutoCrossfadeDurationMs(currentId: String, nextId: String): Long {
+        val current = audioFeatureCache[currentId]
+        val next = audioFeatureCache[nextId]
+        val currentBpm = current?.bpm
+        val nextBpm = next?.bpm
+        if (currentBpm == null || nextBpm == null || currentBpm <= 0 || nextBpm <= 0) {
+            return crossfadeDuration.toLong().coerceIn(1_000L, 30_000L)
+        }
+        val beatMs = 60_000.0 / currentBpm
+        val base = (30_000.0 - (currentBpm.coerceIn(70, 170) - 70) * 230.0)
+        val bpmFactor = bpmGapFactor(currentBpm, nextBpm)
+        val keyFactor = keyGapFactor(current, next)
+        val adjusted = base * bpmFactor * keyFactor
+        val beatOptions = intArrayOf(8, 16, 24, 32, 40, 48, 64, 80, 96)
+        val beats = beatOptions.minByOrNull { abs(it * beatMs - adjusted) } ?: 32
+        return (beats * beatMs).toLong().coerceIn(20_000L, 45_000L)
+    }
+
+    private fun bpmGapFactor(a: Int, b: Int): Double {
+        var ratio = b.toDouble() / a.toDouble()
+        while (ratio > 1.5) ratio /= 2.0
+        while (ratio < 0.67) ratio *= 2.0
+        return 1.0 + abs(1.0 - ratio) * 2.0
+    }
+
+    private fun keyGapFactor(a: AudioFeatures?, b: AudioFeatures?): Double {
+        val ka = a?.key ?: return 1.25
+        val kb = b?.key ?: return 1.25
+        val ca = camelotCode(ka, a?.keyScale) ?: return 1.25
+        val cb = camelotCode(kb, b?.keyScale) ?: return 1.25
+        val dist = camelotDistance(ca, cb)
+        return when { dist <= 1 -> 1.0; dist == 2 -> 1.1; dist <= 4 -> 1.25; else -> 1.4 }
+    }
+
+    private data class CamelotCode(val number: Int, val minor: Boolean)
+
+    private fun camelotCode(key: String, scale: String?): CamelotCode? {
+        val semitone = keyToSemitone(key)
+        if (semitone < 0) return null
+        val minor = scale?.uppercase()?.contains("MIN") == true
+        val minorMap = intArrayOf(5, 12, 7, 2, 9, 4, 11, 6, 1, 8, 3, 10)
+        val majorMap = intArrayOf(8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6, 1)
+        return CamelotCode(if (minor) minorMap[semitone] else majorMap[semitone], minor)
+    }
+
+    private fun camelotDistance(a: CamelotCode, b: CamelotCode): Int {
+        val numberDiff = abs(a.number - b.number)
+        return minOf(numberDiff, 12 - numberDiff) + if (a.minor != b.minor) 1 else 0
+    }
+
+    private fun keyToSemitone(key: String): Int = when (
+        key.trim().replace("Sharp", "#", true).replace("Flat", "b", true).replaceFirstChar { it.uppercaseChar() }
+    ) {
+        "C" -> 0; "C#", "Db" -> 1; "D" -> 2; "D#", "Eb" -> 3; "E" -> 4; "F" -> 5
+        "F#", "Gb" -> 6; "G" -> 7; "G#", "Ab" -> 8; "A" -> 9; "A#", "Bb" -> 10; "B" -> 11
+        else -> -1
+    }
+
+    private fun calculateAutoBpmRatio(currentId: String, nextId: String): Float {
+        val a = audioFeatureCache[currentId]?.bpm ?: return 1f
+        val b = audioFeatureCache[nextId]?.bpm ?: return 1f
+        var ratio = b.toFloat() / a.toFloat()
+        while (ratio > 1.5f) ratio /= 2f
+        while (ratio < 0.67f) ratio *= 2f
+        return if (ratio in 0.75f..1.25f) (kotlin.math.round(ratio / 0.02f) * 0.02f).coerceIn(0.75f, 1.25f) else 1f
+    }
+
+    private fun calculateAutoPitchRatio(currentId: String, nextId: String): Float {
+        val a = audioFeatureCache[currentId] ?: return 1f
+        val b = audioFeatureCache[nextId] ?: return 1f
+        val ca = camelotCode(a.key ?: return 1f, a.keyScale) ?: return 1f
+        val cb = camelotCode(b.key ?: return 1f, b.keyScale) ?: return 1f
+        if (camelotDistance(ca, cb) <= 1) return 1f
+        val semitone = keyToSemitone(a.key!!)
+        val minorMap = intArrayOf(5, 12, 7, 2, 9, 4, 11, 6, 1, 8, 3, 10)
+        val majorMap = intArrayOf(8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6, 1)
+        val shifts = intArrayOf(-1, 1, -2, 2)
+        val minor = ca.minor
+        for (shift in shifts) {
+            val shifted = (semitone + shift + 12) % 12
+            val number = if (minor) minorMap[shifted] else majorMap[shifted]
+            if (camelotDistance(CamelotCode(number, minor), cb) <= 1) {
+                return exp(ln(2.0) * shift / 12.0).toFloat()
+            }
+        }
+        return 1f
+    }
+
     private fun releaseSecondaryPlayer() {
         secondaryPlayer?.let { secPlayer ->
             runCatching { secPlayer.stop() }
@@ -4998,7 +5155,8 @@ class MusicService :
             runCatching { secPlayer.release() }
             playerNormalizationProcessors.remove(secPlayer)
             playerSilenceProcessors.remove(secPlayer)
-            nativeAudioProcessors.remove(secPlayer)
+            crossfadeFilterProcessors.remove(secPlayer)
+                        nativeAudioProcessors.remove(secPlayer)
         }
         secondaryPlayer = null
         secondaryPrewarmed = false
@@ -5012,6 +5170,20 @@ class MusicService :
         isCrossfading = true
         val nextPlayer = secondaryPlayer ?: return
         val currentPlayer = player
+
+        // Audio-level DJ filtering: outgoing track loses highs while incoming gains body,
+        // matching the useful part of SimpMusic's filter-based DJ transition.
+        crossfadeFilterProcessors[currentPlayer]?.apply {
+            filterType = CrossfadeFilterAudioProcessor.FilterType.LOW_PASS
+            cutoffFrequencyHz = 20_000f
+            enabled = crossfadeStyle == CrossfadeStyle.DJ_PUNCH || crossfadeStyle == CrossfadeStyle.AUTO_MIX
+        }
+        crossfadeFilterProcessors[nextPlayer]?.apply {
+            filterType = CrossfadeFilterAudioProcessor.FilterType.HIGH_PASS
+            cutoffFrequencyHz = 20f
+            enabled = crossfadeStyle == CrossfadeStyle.DJ_PUNCH || crossfadeStyle == CrossfadeStyle.AUTO_MIX
+        }
+        crossfadeFilterActive = crossfadeStyle == CrossfadeStyle.DJ_PUNCH || crossfadeStyle == CrossfadeStyle.AUTO_MIX
 
         fadingPlayer = currentPlayer
         player = nextPlayer
@@ -5075,9 +5247,16 @@ class MusicService :
 
         crossfadeJob =
             scope.launch {
-                val speed = fadingPlayer?.playbackParameters?.speed?.coerceAtLeast(0.01f) ?: 1f
-                val duration = (crossfadeDuration / speed).toLong().coerceAtLeast(1L)
+                val baseParameters = fadingPlayer?.playbackParameters ?: PlaybackParameters.DEFAULT
                 val style = crossfadeStyle
+                val configuredDuration = (if (style == CrossfadeStyle.AUTO_MIX) resolveAutoCrossfadeDurationMs(fadingPlayer?.currentMediaItem?.mediaId.orEmpty(), player.currentMediaItem?.mediaId.orEmpty()).toFloat() else crossfadeDuration) / baseParameters.speed.coerceAtLeast(0.01f)
+                val remainingDuration = fadingPlayer?.let { old ->
+                    val remainingMs = old.duration - old.currentPosition
+                    if (old.duration > 0L && remainingMs > 0L) remainingMs / baseParameters.speed.coerceAtLeast(0.01f) else configuredDuration.toLong()
+                } ?: configuredDuration.toLong()
+                val duration = minOf(configuredDuration.toLong(), remainingDuration).coerceAtLeast(1_000L).toFloat()
+                val autoBpmRatio = if (style == CrossfadeStyle.AUTO_MIX) calculateAutoBpmRatio(fadingPlayer?.currentMediaItem?.mediaId.orEmpty(), player.currentMediaItem?.mediaId.orEmpty()) else 1f
+                val autoPitchRatio = if (style == CrossfadeStyle.AUTO_MIX) calculateAutoPitchRatio(fadingPlayer?.currentMediaItem?.mediaId.orEmpty(), player.currentMediaItem?.mediaId.orEmpty()) else 1f
                 val startVolume =
                     try {
                         fadingPlayer?.volume ?: 1f
@@ -5094,6 +5273,8 @@ class MusicService :
                 // configured crossfade duration.
                 var accumulatedMs = 0L
                 var lastTickNanos = System.nanoTime()
+                var lastAutoSpeed = Float.NaN
+                var lastAutoPitch = Float.NaN
 
                 while (isActive) {
                     if (!player.isPlaying) {
@@ -5109,6 +5290,27 @@ class MusicService :
                     val progress = (accumulatedMs.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
                     val gains = CrossfadeCurve.gains(style, progress)
 
+                    if (crossfadeFilterActive) {
+                        val filterProgress = CrossfadeCurve.djFilterProgress(progress)
+                        val outgoingCutoff = CrossfadeCurve.exponentialInterpolate(20_000f, 200f, filterProgress)
+                        val incomingStart = if (style == CrossfadeStyle.AUTO_MIX) 2_000f else 8_000f
+                        val incomingCutoff = CrossfadeCurve.exponentialInterpolate(incomingStart, 20f, filterProgress)
+                        crossfadeFilterProcessors[fadingPlayer]?.cutoffFrequencyHz = outgoingCutoff
+                        crossfadeFilterProcessors[player]?.cutoffFrequencyHz = incomingCutoff
+                    }
+
+                    if (style == CrossfadeStyle.AUTO_MIX && (autoBpmRatio != 1f || autoPitchRatio != 1f)) {
+                        val ramp = (progress / 0.6f).coerceIn(0f, 1f)
+                        val smooth = ramp * ramp * (3f - 2f * ramp)
+                        val outSpeed = baseParameters.speed * (1f + (autoBpmRatio - 1f) * smooth)
+                        val outPitch = baseParameters.pitch * (1f + (autoPitchRatio - 1f) * smooth)
+                        if (outSpeed != lastAutoSpeed || outPitch != lastAutoPitch) {
+                            fadingPlayer?.playbackParameters = PlaybackParameters(outSpeed, outPitch)
+                            lastAutoSpeed = outSpeed
+                            lastAutoPitch = outPitch
+                        }
+                    }
+
                     try {
                         player.volume = startVolume * gains.fadeIn
                         fadingPlayer?.volume = startVolume * gains.fadeOut
@@ -5123,6 +5325,9 @@ class MusicService :
                 try {
                     fadingPlayer?.volume = 0f
                     player.volume = startVolume
+                    crossfadeFilterProcessors[fadingPlayer]?.apply { enabled = false; cutoffFrequencyHz = 20_000f }
+                    crossfadeFilterProcessors[player]?.apply { enabled = false; cutoffFrequencyHz = 20_000f }
+                    crossfadeFilterActive = false
                 } catch (e: Exception) {
                 }
 
@@ -5131,7 +5336,12 @@ class MusicService :
     }
 
     private fun cleanupCrossfade(fadingPlayerSessionId: Int = C.AUDIO_SESSION_ID_UNSET) {
-        fadingPlayer?.let { playerNormalizationProcessors.remove(it) }
+        fadingPlayer?.let {
+            playerNormalizationProcessors.remove(it)
+            playerSilenceProcessors.remove(it)
+            crossfadeFilterProcessors.remove(it)
+                        nativeAudioProcessors.remove(it)
+        }
         fadingPlayer?.stop()
         fadingPlayer?.clearMediaItems()
         fadingPlayer?.release()
