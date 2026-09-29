@@ -273,6 +273,15 @@ class CrossfadeFilterAudioProcessor(
         a2 = aa2 / aa0
     }
 
+    private fun replaceOutputBuffer(size: Int): ByteBuffer {
+        if (outputBuffer.capacity() < size) {
+            outputBuffer = ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN)
+        } else {
+            outputBuffer.clear()
+        }
+        return outputBuffer
+    }
+
     override fun queueEndOfStream() {
         inputEnded = true
     }
