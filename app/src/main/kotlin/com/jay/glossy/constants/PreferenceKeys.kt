@@ -238,6 +238,45 @@ val PreventDuplicateTracksInQueueKey = booleanPreferencesKey("preventDuplicateTr
 val CrossfadeEnabledKey = booleanPreferencesKey("crossfadeEnabled")
 val CrossfadeDurationKey = floatPreferencesKey("crossfadeDurationFloat")
 val CrossfadeGaplessKey = booleanPreferencesKey("crossfadeGapless")
+val CrossfadeStyleKey = stringPreferencesKey("crossfadeStyle")
+
+enum class CrossfadeStyle(
+    val title: String,
+    val description: String,
+) {
+    LINEAR(
+        "Linear",
+        "Even fade from the current song to the next song.",
+    ),
+    SMOOTH(
+        "Smooth",
+        "Gentle quadratic fade with a natural handoff.",
+    ),
+    EQUAL_POWER(
+        "Equal Power",
+        "Keeps perceived loudness more consistent through the blend.",
+    ),
+    FAST_IN(
+        "Fast In",
+        "The next song becomes prominent earlier.",
+    ),
+    SLOW_IN(
+        "Slow In",
+        "The next song enters gradually and stays subtle longer.",
+    ),
+    FAST_OUT(
+        "Fast Out",
+        "The current song exits quickly once the blend starts.",
+    ),
+    SLOW_OUT(
+        "Slow Out",
+        "The current song remains present longer during the blend.",
+    ),
+    DJ_PUNCH(
+        "DJ Punch",
+        "A more aggressive handoff with an early, energetic next-track entry.",
+    ),
+}
 
 val MaxImageCacheSizeKey = intPreferencesKey("maxImageCacheSize")
 val MaxSongCacheSizeKey = intPreferencesKey("maxSongCacheSize")
