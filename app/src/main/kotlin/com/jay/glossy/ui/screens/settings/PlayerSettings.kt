@@ -48,6 +48,8 @@ import com.jay.glossy.constants.AutoDownloadOnLikeKey
 import com.jay.glossy.constants.CrossfadeDurationKey
 import com.jay.glossy.constants.CrossfadeEnabledKey
 import com.jay.glossy.constants.CrossfadeGaplessKey
+import com.jay.glossy.constants.CrossfadeStyle
+import com.jay.glossy.constants.CrossfadeStyleKey
 import com.jay.glossy.constants.AutoLoadMoreKey
 import com.jay.glossy.constants.AutoRadioQueueKey
 import com.jay.glossy.constants.AutoSkipNextOnErrorKey
@@ -117,6 +119,10 @@ fun PlayerSettings(
     val (crossfadeGapless, onCrossfadeGaplessChange) = rememberPreference(
         CrossfadeGaplessKey,
         defaultValue = true
+    )
+    val (crossfadeStyle, onCrossfadeStyleChange) = rememberEnumPreference(
+        CrossfadeStyleKey,
+        defaultValue = CrossfadeStyle.SMOOTH,
     )
     val (persistentQueue, onPersistentQueueChange) = rememberPreference(
         PersistentQueueKey,
@@ -293,6 +299,23 @@ fun PlayerSettings(
         )
     }
 
+    var showCrossfadeStyleDialog by remember { mutableStateOf(false) }
+
+    if (showCrossfadeStyleDialog) {
+        EnumDialog(
+            onDismiss = { showCrossfadeStyleDialog = false },
+            onSelect = {
+                onCrossfadeStyleChange(it)
+                showCrossfadeStyleDialog = false
+            },
+            title = "Crossfade style",
+            current = crossfadeStyle,
+            values = CrossfadeStyle.values().toList(),
+            valueText = { it.title },
+            valueDescription = { it.description },
+        )
+    }
+
     Column(
         Modifier
             .windowInsetsPadding(
@@ -377,6 +400,12 @@ fun PlayerSettings(
                                 )
                             }
                         }
+                    ))
+                    add(Material3SettingsItem(
+                        icon = painterResource(R.drawable.linear_scale),
+                        title = { Text("Crossfade style") },
+                        description = { Text(crossfadeStyle.title) },
+                        onClick = { showCrossfadeStyleDialog = true }
                     ))
                     add(Material3SettingsItem(
                         icon = painterResource(R.drawable.album),
