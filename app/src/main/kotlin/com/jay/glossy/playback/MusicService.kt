@@ -319,14 +319,24 @@ class MusicService :
     private var crossfadeDuration = 5000f
     private var crossfadeGapless = true
     private var crossfadeMessage: PlayerMessage? = null
+    private var crossfadePrepareMessage: PlayerMessage? = null
+    private var crossfadeTargetMediaId: String? = null
+    private var crossfadeArmed = false
 
     private val secondaryPlayerListener =
         object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                // The secondary player is intentionally prepared silently before the actual
+                // crossfade. If it was still buffering when the fade point was reached, start
+                // the fade as soon as it becomes READY instead of swapping to silence.
+                if (playbackState == Player.STATE_READY && crossfadeArmed && !isCrossfading) {
+                    tryStartCrossfade()
+                }
+            }
+
             override fun onPlayerError(error: PlaybackException) {
                 Timber.tag(TAG).e(error, "Secondary player error")
-                secondaryPlayer?.stop()
-                secondaryPlayer?.clearMediaItems()
-                secondaryPlayer = null
+                releaseSecondaryPlayer()
             }
         }
 
@@ -496,6 +506,7 @@ class MusicService :
     private var isAudioEffectSessionOpened = false
     private var openedAudioEffectSessionId: Int = C.AUDIO_SESSION_ID_UNSET
     private val playerNormalizationProcessors = HashMap<Player, VolumeNormalizationAudioProcessor>()
+    private val nativeAudioProcessors = HashMap<Player, NativeAudioProcessor>()
 
     private var loudnessSetupJob: Job? = null
     private var loudnessSetupGeneration: Long = 0L
@@ -1476,7 +1487,8 @@ class MusicService :
         equalizerService.addAudioProcessor(eqProcessor)
 
         val silenceProcessor = SilenceDetectorAudioProcessor { handleLongSilenceDetected() }
-        nativeAudioProcessor = NativeAudioProcessor()
+        val playerNativeAudioProcessor = NativeAudioProcessor()
+        nativeAudioProcessor = playerNativeAudioProcessor
 
         // Set initial state — use pre-read prefs when available, otherwise fall back to DataStore
         val useAudioTrackPlaybackParams = if (prefs != null) {
@@ -1497,7 +1509,7 @@ class MusicService :
             ExoPlayer
                 .Builder(this)
                 .setMediaSourceFactory(createMediaSourceFactory())
-                .setRenderersFactory(createRenderersFactory(normalizationProcessor, eqProcessor, silenceProcessor, nativeAudioProcessor, useAudioTrackPlaybackParams))
+                .setRenderersFactory(createRenderersFactory(normalizationProcessor, eqProcessor, silenceProcessor, playerNativeAudioProcessor, useAudioTrackPlaybackParams))
                 .setLoadControl(
                     // Start playback once ~750ms is buffered (media3's default is 1000ms) so first
                     // audio is audible a touch sooner. min/max/after-rebuffer match the media3 1.x
@@ -1523,6 +1535,7 @@ class MusicService :
 
         playerNormalizationProcessors[player] = normalizationProcessor
         playerSilenceProcessors[player] = silenceProcessor
+        nativeAudioProcessors[player] = playerNativeAudioProcessor
 
         // FIX: Ensure new ExoPlayer instances inherit the selected routing!
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && preferredDeviceId != null) {
@@ -4787,7 +4800,17 @@ class MusicService :
     private fun scheduleCrossfade() {
         crossfadeMessage?.cancel()
         crossfadeMessage = null
-        
+        crossfadePrepareMessage?.cancel()
+        crossfadePrepareMessage = null
+        crossfadeArmed = false
+
+        // A previous preparation belongs to the old track. Never let a stale secondary
+        // player survive a seek/queue/timeline change.
+        if (!isCrossfading) {
+            releaseSecondaryPlayer()
+        }
+        crossfadeTargetMediaId = null
+
         val mediaCrossfadeDuration = crossfadeDuration.toLong()
 
         if (!crossfadeEnabled || crossfadeDuration <= 0f || player.duration == C.TIME_UNSET || player.duration <= mediaCrossfadeDuration) return
@@ -4798,12 +4821,46 @@ class MusicService :
         val mediaTimeRemaining = triggerTime - player.currentPosition
         if (mediaTimeRemaining <= 0) return
 
-        val targetMediaId = player.currentMediaItem?.mediaId
+        val targetMediaId = player.currentMediaItem?.mediaId ?: return
+        val targetIndex =
+            if (player.repeatMode == REPEAT_MODE_ONE) {
+                player.currentMediaItemIndex
+            } else {
+                player.nextMediaItemIndex
+            }
+        if (targetIndex == C.INDEX_UNSET) return
+
+        crossfadeTargetMediaId = targetMediaId
+        // Do not wait until the fade point to start network/decoder preparation. On slower
+        // devices the old implementation did prepare()+playWhenReady=true and immediately
+        // swapped players, which made the new player's fade-in run while it was still silent.
+        // Give the secondary player a small warm-up window, while keeping the configured
+        // crossfade duration unchanged.
+        val warmupLeadMs = minOf(3000L, maxOf(1000L, mediaCrossfadeDuration / 2L))
+        val prepareTime = maxOf(0L, triggerTime - warmupLeadMs)
+
+        crossfadePrepareMessage = player.createMessage { _, _ ->
+            if (player.currentMediaItem?.mediaId == targetMediaId &&
+                !isCrossfading &&
+                crossfadeTargetMediaId == targetMediaId &&
+                secondaryPlayer == null
+            ) {
+                prepareSecondaryPlayer(targetIndex)
+            }
+        }.apply {
+            setLooper(Looper.getMainLooper())
+            setPosition(prepareTime)
+            send()
+        }
 
         crossfadeMessage = player.createMessage { _, _ ->
-            val timer = sleepTimer
-            if (player.isPlaying && player.currentMediaItem?.mediaId == targetMediaId && (timer == null || !timer.pauseWhenSongEnd)) {
-                startCrossfade()
+            if (player.isPlaying &&
+                player.currentMediaItem?.mediaId == targetMediaId &&
+                crossfadeTargetMediaId == targetMediaId &&
+                !isCrossfading
+            ) {
+                crossfadeArmed = true
+                tryStartCrossfade()
             }
         }.apply {
             setLooper(Looper.getMainLooper())
@@ -4812,69 +4869,88 @@ class MusicService :
         }
     }
 
-    private fun isNextItemGapless(): Boolean {
-        val current = player.currentMediaItem?.mediaMetadata ?: return false
-        val nextIndex = player.nextMediaItemIndex
-        if (nextIndex == C.INDEX_UNSET) return false
-        val next = player.getMediaItemAt(nextIndex).mediaMetadata
-        return current.albumTitle != null && current.albumTitle == next.albumTitle
-    }
-
-    private fun startCrossfade() {
-        if (isCrossfading) return
-
-
-
-        // Preserve player state before creating the secondary player
-        // Use runBlocking to ensure we get the correct state from DataStore
-        val savedRepeatMode = runBlocking { dataStore.get(RepeatModeKey, REPEAT_MODE_OFF) }
-        val savedShuffleEnabled = runBlocking { dataStore.get(ShuffleModeKey, false) }
-
-        // For repeat-one, crossfade back into the same track
-        val targetIndex =
-            if (savedRepeatMode == REPEAT_MODE_ONE) {
-                player.currentMediaItemIndex
-            } else {
-                player.nextMediaItemIndex
-            }
+    private fun prepareSecondaryPlayer(targetIndex: Int) {
+        if (isCrossfading || secondaryPlayer != null) return
         if (targetIndex == C.INDEX_UNSET) return
 
-        secondaryPlayer = createExoPlayer()
-        val secPlayer = secondaryPlayer!!
+        val currentPlayer = player
+        val secPlayer = createExoPlayer()
+        secondaryPlayer = secPlayer
+        // createExoPlayer also initializes service-level processor/flow state. While this
+        // player is only a prebuffer, the audible player must remain the service's current
+        // processor and published player.
+        nativeAudioProcessor = nativeAudioProcessors[currentPlayer] ?: nativeAudioProcessor
+        _playerFlow.value = currentPlayer
         secPlayer.addListener(secondaryPlayerListener)
 
-        val itemCount = player.mediaItemCount
+        val itemCount = currentPlayer.mediaItemCount
         val items = mutableListOf<MediaItem>()
         for (i in 0 until itemCount) {
-            items.add(player.getMediaItemAt(i))
+            items.add(currentPlayer.getMediaItemAt(i))
         }
 
         secPlayer.setMediaItems(items)
         secPlayer.seekTo(targetIndex, 0)
         secPlayer.volume = 0f
-
-        secPlayer.setPlaybackParameters(player.playbackParameters)
-
-        secPlayer.repeatMode = savedRepeatMode
-        secPlayer.shuffleModeEnabled = savedShuffleEnabled
-        secPlayer.playbackParameters = player.playbackParameters
+        secPlayer.setPlaybackParameters(currentPlayer.playbackParameters)
+        secPlayer.repeatMode = currentPlayer.repeatMode
+        secPlayer.shuffleModeEnabled = currentPlayer.shuffleModeEnabled
 
         try {
+            // Prepare/buffer without advancing the next track. The old implementation
+            // started the secondary player at the fade point, which made the replacement
+            // track safe to start at position 0. With early preparation we must keep it
+            // paused, otherwise several seconds of the next song would be consumed before
+            // the audible fade actually begins.
+            secPlayer.playWhenReady = false
             secPlayer.prepare()
-            secPlayer.playWhenReady = true
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Failed to prepare secondary player for crossfade")
-            playerNormalizationProcessors.remove(secPlayer)
-            secPlayer.release()
-            secondaryPlayer = null
+            releaseSecondaryPlayer()
+        }
+    }
+
+    private fun tryStartCrossfade() {
+        if (isCrossfading || !crossfadeArmed) return
+
+        val targetMediaId = crossfadeTargetMediaId ?: return
+        if (player.currentMediaItem?.mediaId != targetMediaId) {
+            crossfadeArmed = false
+            releaseSecondaryPlayer()
             return
         }
 
-        performCrossfadeSwap()
+        val nextPlayer = secondaryPlayer ?: return
 
-        if (savedShuffleEnabled) {
-            val shufflePlaylistFirst = dataStore.get(ShufflePlaylistFirstKey, false)
-            applyShuffleOrder(player.currentMediaItemIndex, player.mediaItemCount, shufflePlaylistFirst)
+        // Never swap to a player that has not produced a READY state. This is the critical
+        // no-gap invariant: the current player remains fully audible until the replacement
+        // is actually capable of producing audio.
+        if (nextPlayer.playbackState != Player.STATE_READY) return
+
+        val remaining = player.duration - player.currentPosition
+        if (remaining <= 0L) {
+            crossfadeArmed = false
+            releaseSecondaryPlayer()
+            return
+        }
+
+        crossfadeArmed = false
+        performCrossfadeSwap()
+    }
+
+    private fun releaseSecondaryPlayer() {
+        secondaryPlayer?.let { secPlayer ->
+            runCatching { secPlayer.stop() }
+            runCatching { secPlayer.clearMediaItems() }
+            runCatching { secPlayer.release() }
+            playerNormalizationProcessors.remove(secPlayer)
+            playerSilenceProcessors.remove(secPlayer)
+            nativeAudioProcessors.remove(secPlayer)
+        }
+        secondaryPlayer = null
+        if (::player.isInitialized && !isCrossfading) {
+            nativeAudioProcessor = nativeAudioProcessors[player] ?: nativeAudioProcessor
+            _playerFlow.value = player
         }
     }
 
@@ -4885,6 +4961,7 @@ class MusicService :
 
         fadingPlayer = currentPlayer
         player = nextPlayer
+        nativeAudioProcessor = nativeAudioProcessors[nextPlayer] ?: nativeAudioProcessor
         _playerFlow.value = player
         secondaryPlayer = null
 
@@ -4927,8 +5004,8 @@ class MusicService :
             timber.log.Timber.e(e, "Failed to swap player in MediaSession")
         }
 
-        // secondaryPlayer was playing this item silently in the background without
-        // `this` attached as a listener, so its real transition into this item never
+        // secondaryPlayer was prepared without `this` attached as a listener, so its
+        // real transition into this item never
         // reached onMediaItemTransition. Re-fire it manually now that the swap is done
         // so metadata recovery, cache marking, scrobbling, and normalization all run.
         onMediaItemTransition(player.currentMediaItem, Player.MEDIA_ITEM_TRANSITION_REASON_AUTO)
@@ -4936,6 +5013,11 @@ class MusicService :
         val previousAudioSessionId = fadingPlayer?.audioSessionId ?: C.AUDIO_SESSION_ID_UNSET
 
         openAudioEffectSession()
+
+        // The secondary player was deliberately prepared paused so that the next track
+        // remains at position 0 until the configured crossfade begins. Start it now, after
+        // the player/session handoff, so the fade-in and decoded audio share the same start.
+        nextPlayer.play()
 
         crossfadeJob =
             scope.launch {
