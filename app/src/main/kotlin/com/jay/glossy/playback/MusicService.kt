@@ -5250,9 +5250,13 @@ class MusicService :
                 val baseParameters = fadingPlayer?.playbackParameters ?: PlaybackParameters.DEFAULT
                 val style = crossfadeStyle
                 val configuredDuration = (if (style == CrossfadeStyle.AUTO_MIX) resolveAutoCrossfadeDurationMs(fadingPlayer?.currentMediaItem?.mediaId.orEmpty(), player.currentMediaItem?.mediaId.orEmpty()).toFloat() else crossfadeDuration) / baseParameters.speed.coerceAtLeast(0.01f)
-                val remainingDuration = fadingPlayer?.let { old ->
+                val remainingDuration: Long = fadingPlayer?.let { old ->
                     val remainingMs = old.duration - old.currentPosition
-                    if (old.duration > 0L && remainingMs > 0L) remainingMs / baseParameters.speed.coerceAtLeast(0.01f) else configuredDuration.toLong()
+                    if (old.duration > 0L && remainingMs > 0L) {
+                        (remainingMs.toDouble() / baseParameters.speed.coerceAtLeast(0.01f).toDouble()).toLong()
+                    } else {
+                        configuredDuration.toLong()
+                    }
                 } ?: configuredDuration.toLong()
                 val duration = minOf(configuredDuration.toLong(), remainingDuration).coerceAtLeast(1_000L).toFloat()
                 val autoBpmRatio = if (style == CrossfadeStyle.AUTO_MIX) calculateAutoBpmRatio(fadingPlayer?.currentMediaItem?.mediaId.orEmpty(), player.currentMediaItem?.mediaId.orEmpty()) else 1f
@@ -5295,7 +5299,9 @@ class MusicService :
                         val outgoingCutoff = CrossfadeCurve.exponentialInterpolate(20_000f, 200f, filterProgress)
                         val incomingStart = if (style == CrossfadeStyle.AUTO_MIX) 2_000f else 8_000f
                         val incomingCutoff = CrossfadeCurve.exponentialInterpolate(incomingStart, 20f, filterProgress)
-                        crossfadeFilterProcessors[fadingPlayer]?.cutoffFrequencyHz = outgoingCutoff
+                        fadingPlayer?.let { oldPlayer ->
+                            crossfadeFilterProcessors[oldPlayer]?.cutoffFrequencyHz = outgoingCutoff
+                        }
                         crossfadeFilterProcessors[player]?.cutoffFrequencyHz = incomingCutoff
                     }
 
@@ -5325,8 +5331,16 @@ class MusicService :
                 try {
                     fadingPlayer?.volume = 0f
                     player.volume = startVolume
-                    crossfadeFilterProcessors[fadingPlayer]?.apply { enabled = false; cutoffFrequencyHz = 20_000f }
-                    crossfadeFilterProcessors[player]?.apply { enabled = false; cutoffFrequencyHz = 20_000f }
+                    fadingPlayer?.let { oldPlayer ->
+                        crossfadeFilterProcessors[oldPlayer]?.apply {
+                            enabled = false
+                            cutoffFrequencyHz = 20_000f
+                        }
+                    }
+                    crossfadeFilterProcessors[player]?.apply {
+                        enabled = false
+                        cutoffFrequencyHz = 20_000f
+                    }
                     crossfadeFilterActive = false
                 } catch (e: Exception) {
                 }
