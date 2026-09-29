@@ -122,6 +122,8 @@ import com.jay.glossy.constants.AutoplayKey
 import com.jay.glossy.constants.CrossfadeDurationKey
 import com.jay.glossy.constants.CrossfadeEnabledKey
 import com.jay.glossy.constants.CrossfadeGaplessKey
+import com.jay.glossy.constants.CrossfadeStyle
+import com.jay.glossy.constants.CrossfadeStyleKey
 import com.jay.glossy.constants.SoundFxEnabledKey
 import com.jay.glossy.constants.DisableLoadMoreWhenRepeatAllKey
 import com.jay.glossy.constants.DiscordActivityNameKey
@@ -318,6 +320,7 @@ class MusicService :
     private var crossfadeEnabled = false
     private var crossfadeDuration = 5000f
     private var crossfadeGapless = true
+    private var crossfadeStyle = CrossfadeStyle.SMOOTH
     private var crossfadeMessage: PlayerMessage? = null
     private var crossfadePrepareMessage: PlayerMessage? = null
     private var crossfadeTargetMediaId: String? = null
@@ -1331,6 +1334,15 @@ class MusicService :
                 crossfadeEnabled = enabled
                 crossfadeDuration = duration * 1000f // Convert to ms
                 crossfadeGapless = gapless
+            }
+
+        dataStore.data
+            .map { prefs -> prefs[CrossfadeStyleKey]?.let { value ->
+                runCatching { CrossfadeStyle.valueOf(value) }.getOrDefault(CrossfadeStyle.SMOOTH)
+            } ?: CrossfadeStyle.SMOOTH }
+            .distinctUntilChanged()
+            .collect(scope) { style ->
+                crossfadeStyle = style
             }
 
         // Observe and cache common preferences to avoid runBlocking reads in playback callbacks
@@ -4814,7 +4826,6 @@ class MusicService :
         val mediaCrossfadeDuration = crossfadeDuration.toLong()
 
         if (!crossfadeEnabled || crossfadeDuration <= 0f || player.duration == C.TIME_UNSET || player.duration <= mediaCrossfadeDuration) return
-        if (crossfadeGapless && isNextItemGapless()) return
         if (!player.hasNextMediaItem() && player.repeatMode != REPEAT_MODE_ONE) return
 
         val triggerTime = player.duration - mediaCrossfadeDuration
@@ -5022,34 +5033,48 @@ class MusicService :
         crossfadeJob =
             scope.launch {
                 val speed = fadingPlayer?.playbackParameters?.speed?.coerceAtLeast(0.01f) ?: 1f
-                val duration = (crossfadeDuration / speed).toLong()
-                val steps = 20
-                val stepTime = duration / steps
+                val duration = (crossfadeDuration / speed).toLong().coerceAtLeast(1L)
+                val style = crossfadeStyle
                 val startVolume =
                     try {
                         fadingPlayer?.volume ?: 1f
                     } catch (e: Exception) {
                         1f
                     }
+                while (!player.isPlaying && isActive) {
+                    delay(50)
+                }
+                if (!isActive) return@launch
 
-                for (i in 0..steps) {
-                    if (!isActive) break
-                    while (!player.isPlaying && isActive) {
-                        delay(100)
+                // Start the fade clock only after the replacement player is actually audible.
+                // Buffering, audio-focus pauses, or scheduler delays must not consume the
+                // configured crossfade duration.
+                var accumulatedMs = 0L
+                var lastTickNanos = System.nanoTime()
+
+                while (isActive) {
+                    if (!player.isPlaying) {
+                        delay(50)
+                        lastTickNanos = System.nanoTime()
+                        continue
                     }
 
-                    val progress = i / steps.toFloat()
-                    val fadeIn = 1.0f - (1.0f - progress) * (1.0f - progress)
-                    val fadeOut = (1.0f - progress) * (1.0f - progress)
+                    val nowNanos = System.nanoTime()
+                    accumulatedMs += ((nowNanos - lastTickNanos) / 1_000_000L).coerceAtLeast(0L)
+                    lastTickNanos = nowNanos
+
+                    val progress = (accumulatedMs.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+                    val gains = CrossfadeCurve.gains(style, progress)
 
                     try {
-                        player.volume = startVolume * fadeIn
-                        fadingPlayer?.volume = startVolume * fadeOut
+                        player.volume = startVolume * gains.fadeIn
+                        fadingPlayer?.volume = startVolume * gains.fadeOut
                     } catch (e: Exception) {
                         break
                     }
 
-                    delay(stepTime)
+                    if (progress >= 1f) break
+                    delay(16)
                 }
 
                 try {
