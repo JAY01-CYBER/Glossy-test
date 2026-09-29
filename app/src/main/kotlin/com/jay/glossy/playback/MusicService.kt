@@ -325,6 +325,7 @@ class MusicService :
     private var crossfadePrepareMessage: PlayerMessage? = null
     private var crossfadeTargetMediaId: String? = null
     private var crossfadeArmed = false
+    private var secondaryPrewarmed = false
 
     private val secondaryPlayerListener =
         object : Player.Listener {
@@ -332,8 +333,16 @@ class MusicService :
                 // The secondary player is intentionally prepared silently before the actual
                 // crossfade. If it was still buffering when the fade point was reached, start
                 // the fade as soon as it becomes READY instead of swapping to silence.
-                if (playbackState == Player.STATE_READY && crossfadeArmed && !isCrossfading) {
-                    tryStartCrossfade()
+                if (playbackState == Player.STATE_READY && !isCrossfading) {
+                    if (crossfadeArmed) {
+                        tryStartCrossfade()
+                    } else if (!secondaryPrewarmed &&
+                        crossfadeTargetMediaId != null &&
+                        player.currentMediaItem?.mediaId == crossfadeTargetMediaId &&
+                        player.isPlaying
+                    ) {
+                        prewarmSecondaryPlayer()
+                    }
                 }
             }
 
@@ -4815,6 +4824,7 @@ class MusicService :
         crossfadePrepareMessage?.cancel()
         crossfadePrepareMessage = null
         crossfadeArmed = false
+        secondaryPrewarmed = false
 
         // A previous preparation belongs to the old track. Never let a stale secondary
         // player survive a seek/queue/timeline change.
@@ -4842,6 +4852,7 @@ class MusicService :
         if (targetIndex == C.INDEX_UNSET) return
 
         crossfadeTargetMediaId = targetMediaId
+        secondaryPrewarmed = false
         // Do not wait until the fade point to start network/decoder preparation. On slower
         // devices the old implementation did prepare()+playWhenReady=true and immediately
         // swapped players, which made the new player's fade-in run while it was still silent.
@@ -4921,6 +4932,37 @@ class MusicService :
         }
     }
 
+    /**
+     * READY means the decoder/buffer is prepared, but the Android audio renderer/audio sink
+     * may still need to be created on the first play(). That startup can take long enough to
+     * create the audible gap seen on some devices. Start the secondary silently for a very
+     * short pre-roll so its renderer/audio sink is already alive when the real crossfade begins.
+     *
+     * We intentionally do not pre-roll while the user is paused. The secondary remains at the
+     * beginning of the track until the service is actually playing.
+     */
+    private fun prewarmSecondaryPlayer() {
+        if (isCrossfading || secondaryPrewarmed) return
+        val secPlayer = secondaryPlayer ?: return
+        if (secPlayer.playbackState != Player.STATE_READY || !player.isPlaying) return
+
+        secondaryPrewarmed = true
+        secPlayer.volume = 0f
+        secPlayer.play()
+
+        scope.launch {
+            delay(120L)
+            if (!isActive) return@launch
+            if (secondaryPlayer === secPlayer &&
+                !isCrossfading &&
+                !crossfadeArmed &&
+                crossfadeTargetMediaId == player.currentMediaItem?.mediaId
+            ) {
+                secPlayer.pause()
+            }
+        }
+    }
+
     private fun tryStartCrossfade() {
         if (isCrossfading || !crossfadeArmed) return
 
@@ -4959,6 +5001,7 @@ class MusicService :
             nativeAudioProcessors.remove(secPlayer)
         }
         secondaryPlayer = null
+        secondaryPrewarmed = false
         if (::player.isInitialized && !isCrossfading) {
             nativeAudioProcessor = nativeAudioProcessors[player] ?: nativeAudioProcessor
             _playerFlow.value = player
