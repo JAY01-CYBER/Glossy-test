@@ -276,6 +276,10 @@ enum class CrossfadeStyle(
         "DJ Punch",
         "A more aggressive handoff with an early, energetic next-track entry.",
     ),
+    AUTO_MIX(
+        "AutoMix",
+        "BPM/key-aware DJ transition with adaptive duration and tempo/pitch matching.",
+    ),
 }
 
 val MaxImageCacheSizeKey = intPreferencesKey("maxImageCacheSize")
