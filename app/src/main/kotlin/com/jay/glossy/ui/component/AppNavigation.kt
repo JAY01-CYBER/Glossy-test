@@ -353,59 +353,22 @@ private fun FloatingAppNavigationBar(
                         },
                     contentAlignment = Alignment.Center,
                 ) {
-                    // Kyant0-style glass surface is a separate layer.
-                    // Only this surface deforms; the icon stays at its original size.
                     Box(
-                        Modifier
+                        modifier = Modifier
                             .matchParentSize()
                             .graphicsLayer {
                                 scaleX = searchGlassScale
                                 scaleY = searchGlassScale
                             }
-                            .drawBackdrop(
-                                backdrop = backdrop,
-                                shape = { searchShape },
-                                effects = {
-                                    vibrancy()
-                                    colorControls(
-                                        brightness = 0.04f,
-                                        contrast = 1f,
-                                        saturation = 1.35f,
-                                    )
-                                    blur(8f.dp.toPx())
-                                    lens(
-                                        18f.dp.toPx(),
-                                        24f.dp.toPx(),
-                                        chromaticAberration = true,
-                                    )
-                                },
-                                highlight = {
-                                    Highlight.Default.copy(
-                                        alpha = if (searchPressed) 0.85f else 0.45f
-                                    )
-                                },
-                                shadow = {
-                                    Shadow(
-                                        radius = 8.dp,
-                                        alpha = if (searchPressed) 0.30f else 0.20f,
-                                    )
-                                },
-                                innerShadow = {
-                                    InnerShadow(
-                                        radius = 7.dp,
-                                        alpha = if (searchPressed) 0.45f else 0.25f,
-                                    )
-                                },
-                                onDrawSurface = {
-                                    drawRect(
-                                        if (pureBlack) {
-                                            Color.White.copy(alpha = 0.055f)
-                                        } else {
-                                            Color.White.copy(alpha = 0.12f)
-                                        }
-                                    }
-                                },
+                            .clip(searchShape)
+                            .background(
+                                if (pureBlack) {
+                                    Color.White.copy(alpha = 0.055f)
+                                } else {
+                                    Color.White.copy(alpha = 0.12f)
+                                }
                             )
+                    )
 
                     Icon(
                         painter = painterResource(
@@ -464,6 +427,7 @@ private fun FloatingAppNavigationBar(
                     }
                 }
             }
+
         }
     }
 }
