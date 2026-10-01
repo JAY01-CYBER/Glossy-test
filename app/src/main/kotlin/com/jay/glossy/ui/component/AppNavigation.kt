@@ -3,7 +3,6 @@
 package com.jay.glossy.ui.component
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -51,7 +50,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
@@ -75,14 +73,10 @@ import com.jay.glossy.constants.EnableGlassFloatingNavBarKey
 import com.jay.glossy.constants.UseFloatingNavBarKey
 import com.jay.glossy.ui.screens.Screens
 import com.jay.glossy.utils.rememberPreference
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
-import java.nio.IntBuffer
-import android.graphics.Bitmap
 
 @Immutable
 private data class NavItemState(
@@ -118,38 +112,7 @@ fun AppNavigationRail(
     val containerColor = if (pureBlack) Color.Black else MaterialTheme.colorScheme.surfaceContainer
     val haptics = LocalHapticFeedback.current
     val viewConfiguration = LocalViewConfiguration.current
-    val (glassEnabled) = rememberPreference(EnableGlassFloatingNavBarKey, defaultValue = false)
-    val glassLayer = rememberGraphicsLayer()
-    val glassLuminance = remember { Animatable(0.5f) }
 
-    LaunchedEffect(glassEnabled, glassLayer) {
-        if (!glassEnabled || backdrop == null) return@LaunchedEffect
-        val buffer = IntBuffer.allocate(25)
-        while (isActive) {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val bitmap = glassLayer.toImageBitmap().asAndroidBitmap()
-                        .scale(5, 5, false)
-                        .copy(Bitmap.Config.ARGB_8888, false)
-                    buffer.rewind()
-                    bitmap.copyPixelsToBuffer(buffer)
-                    bitmap.recycle()
-                }
-                val luminance = (0 until 25).sumOf { index ->
-                    val color = buffer.get(index)
-                    val r = (color shr 16 and 0xFF) / 255f
-                    val g = (color shr 8 and 0xFF) / 255f
-                    val b = (color and 0xFF) / 255f
-                    0.2126 * r + 0.7152 * g + 0.0722 * b
-                } / 25.0
-                glassLuminance.animateTo(
-                    luminance.coerceIn(0.3, 0.8).toFloat(),
-                    tween(500),
-                )
-            }
-            delay(1_000)
-        }
-    }
 
     NavigationRail(
         modifier = modifier,
