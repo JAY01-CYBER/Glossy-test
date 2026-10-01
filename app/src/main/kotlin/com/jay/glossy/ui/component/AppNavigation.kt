@@ -5,7 +5,6 @@ package com.jay.glossy.ui.component
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -40,7 +39,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -266,35 +264,13 @@ private fun FloatingAppNavigationBar(
         }
     }
 
-    val barHeight = if (slimNav) 48.dp else 56.dp
-    val fabSize = if (slimNav) 48.dp else 56.dp
-
-    // Rubber interaction belongs to the complete floating navigation surface.
-    // The main pill and the detached Search FAB therefore scale together.
-    var navPressed by remember { mutableStateOf(false) }
-    val navScale by animateFloatAsState(
-        targetValue = if (navPressed) 1.15f else 1f,
-        animationSpec = spring(
-            dampingRatio = 0.62f,
-            stiffness = 520f,
-        ),
-        label = "FloatingNavRubberScale",
-    )
+    val barHeight = if (slimNav) 48.dp else 56.dp 
+    val fabSize = if (slimNav) 48.dp else 56.dp 
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 12.dp, bottom = 8.dp)
-            .graphicsLayer {
-                scaleX = navScale
-                scaleY = navScale
-            }
-            .pointerInput(Unit) {
-                detectPress {
-                    navPressed = true
-                }
-                navPressed = false
-            },
+            .padding(top = 12.dp, bottom = 8.dp), 
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -348,47 +324,46 @@ private fun FloatingAppNavigationBar(
                 }
             }
 
-            val searchModifier = Modifier
-                .size(fabSize)
-                .then(
-                    if (glassEnabled && hazeState != null) {
-                        Modifier
-                            .clip(CircleShape)
-                            .hazeBlur(
-                                input = HazeInput.Sources(hazeState),
-                                style = HazeMaterials.ultraThin(),
-                                // Keep Haze's render layer exactly inside the FAB bounds.
-                                // The default (true) expands the layer by the blur radius,
-                                // which creates the unwanted rectangular blur outside the button.
-                                expandLayerBounds = false,
-                            )
-                    } else Modifier
-                )
-                .then(
-                    if (glassEnabled && backdrop != null) {
-                        Modifier.drawInteractiveGlass(
-                            isDark = pureBlack,
-                            backdrop = backdrop,
-                            layer = glassLayer,
-                            luminanceAnimation = glassLuminance,
-                            shape = CircleShape,
-                            interaction = rememberGlassInteraction(),
-                        )
-                    } else {
-                        Modifier
-                    }
-                )
-
             if (glassEnabled && backdrop != null) {
                 Box(
-                    modifier = searchModifier.clickable(
-                        interactionSource = interactionSource,
-                        indication = null,
-                    ) {
-                        if (onSearchLongClick == null) onItemClick(searchItem, currentIsSearchSelected)
-                    },
+                    modifier = Modifier
+                        .size(fabSize)
+                        .clickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                        ) {
+                            if (onSearchLongClick == null) onItemClick(searchItem, currentIsSearchSelected)
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
+                    if (glassEnabled && hazeState != null) {
+                        Box(
+                            Modifier
+                                .matchParentSize()
+                                .clip(CircleShape)
+                                .hazeBlur(
+                                    input = HazeInput.Sources(hazeState),
+                                    style = HazeMaterials.ultraThin(),
+                                    expandLayerBounds = false,
+                                )
+                        )
+                    }
+
+                    if (glassEnabled && backdrop != null) {
+                        Box(
+                            Modifier
+                                .matchParentSize()
+                                .drawInteractiveGlass(
+                                    isDark = pureBlack,
+                                    backdrop = backdrop,
+                                    layer = glassLayer,
+                                    luminanceAnimation = glassLuminance,
+                                    shape = CircleShape,
+                                    interaction = rememberGlassInteraction(),
+                                )
+                        )
+                    }
+
                     Icon(
                         painter = painterResource(id = if (isSearchSelected) searchItem.iconIdActive else searchItem.iconIdInactive),
                         contentDescription = stringResource(searchItem.titleId),
@@ -497,34 +472,24 @@ private fun MaterialLiquidTabBar(
     }
 
     val capsuleShape = RoundedCornerShape(50)
+    val glassInteraction = rememberGlassInteraction()
     Box(
         modifier = Modifier
             .height(barHeight)
             .width(totalWidth)
-            .then(
-                if (hazeState != null) {
-                    Modifier
-                        .clip(capsuleShape)
-                        .hazeBlur(
-                            input = HazeInput.Sources(hazeState),
-                            style = HazeMaterials.ultraThin(),
-                            // Do not expand the render layer beyond the floating pill.
-                            // This keeps the backdrop blur physically confined to the nav surface.
-                            expandLayerBounds = false,
-                        )
-                } else Modifier
-            )
+            .then(Modifier)
+            .pointerInput(dampedDrag) {
+                detectPress {
+                    dampedDrag.press()
+                }
+                dampedDrag.release()
+            }
+            // Keep swipe/drag navigation on the fixed outer pill.
+            // The damped animation no longer scales the indicator or content.
             .then(dampedDrag.modifier)
             .then(
                 if (backdrop != null && glassLayer != null) {
-                    Modifier.drawInteractiveGlass(
-                        isDark = pureBlack,
-                        backdrop = backdrop,
-                        layer = glassLayer,
-                        luminanceAnimation = luminance,
-                        shape = capsuleShape,
-                        interaction = rememberGlassInteraction(),
-                    )
+                    Modifier
                 } else {
                     Modifier
                         .shadow(elevation = 12.dp, shape = capsuleShape)
@@ -534,14 +499,43 @@ private fun MaterialLiquidTabBar(
             ),
         contentAlignment = Alignment.CenterStart
     ) {
+        if (hazeState != null) {
+            // Fixed backdrop blur. It never scales with the rubber glass overlay.
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .clip(capsuleShape)
+                    .hazeBlur(
+                        input = HazeInput.Sources(hazeState),
+                        style = HazeMaterials.ultraThin(),
+                        expandLayerBounds = false,
+                    )
+            )
+        }
+
+        if (backdrop != null && glassLayer != null) {
+            // The glass surface is a separate layer from the labels/icons.
+            // Its rubber animation can expand without scaling the content.
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .drawInteractiveGlass(
+                        isDark = pureBlack,
+                        backdrop = backdrop,
+                        layer = glassLayer,
+                        luminanceAnimation = luminance,
+                        shape = capsuleShape,
+                        interaction = glassInteraction,
+                    )
+            )
+        }
+
         val indicatorOpacity by animateFloatAsState(targetValue = if (isMainTabActive) 1f else 0f, label = "Opacity")
         
         // Active Indicator (Blob)
         Box(
             Modifier
                 .graphicsLayer {
-                    // The outer floating navigation surface owns the rubber scale.
-                    // The selected indicator only follows the tab position.
                     translationX = dampedDrag.value * tabWidthPx
                     alpha = indicatorOpacity
                 }
@@ -587,8 +581,9 @@ private fun MaterialLiquidTabBar(
 
         // Icons and Labels Row
         Row(
-            Modifier.fillMaxSize(),
-            verticalAlignment = Alignment.CenterVertically
+            Modifier
+                .fillMaxSize(),
+verticalAlignment = Alignment.CenterVertically
         ) {
             tabs.forEachIndexed { position, screen ->
                 val isSelected = remember(currentRouteState, screen.route) {
