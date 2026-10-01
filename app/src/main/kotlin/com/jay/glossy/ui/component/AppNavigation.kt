@@ -51,10 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.awaitEachGesture
-import androidx.compose.ui.input.pointer.awaitFirstDown
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.waitForUpOrCancellation
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -494,12 +491,10 @@ private fun MaterialLiquidTabBar(
                 } else Modifier
             )
             .pointerInput(dampedDrag) {
-                awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
+                detectPress {
                     dampedDrag.press()
-                    waitForUpOrCancellation()
-                    dampedDrag.release()
                 }
+                dampedDrag.release()
             }
             .then(
                 if (backdrop != null && glassLayer != null) {
