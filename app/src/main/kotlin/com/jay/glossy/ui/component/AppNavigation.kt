@@ -330,7 +330,6 @@ private fun FloatingAppNavigationBar(
             }
         }
     }
-}
 
 @Composable
 private fun MaterialLiquidTabBar(
