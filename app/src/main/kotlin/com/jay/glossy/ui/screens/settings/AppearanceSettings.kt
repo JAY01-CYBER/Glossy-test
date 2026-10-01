@@ -118,8 +118,8 @@ import com.jay.glossy.constants.QuickPickShapeKey
 import com.jay.glossy.constants.QuickPicksStyle
 import com.jay.glossy.constants.QuickPicksStyleKey
 import com.jay.glossy.constants.ShowFeaturedCarouselKey
+import com.jay.glossy.constants.EnableGlassFloatingNavBarKey
 import com.jay.glossy.constants.UseFloatingNavBarKey
-import com.jay.glossy.constants.FloatingNavBarGlassEnabledKey
 import com.jay.glossy.constants.AppFont
 import com.jay.glossy.constants.SelectedFontKey
 import com.jay.glossy.ui.component.DefaultDialog
@@ -333,10 +333,9 @@ fun AppearanceSettings(
             UseFloatingNavBarKey,
             defaultValue = true,
         )
-
-    val (floatingNavBarGlassEnabled, onFloatingNavBarGlassEnabledChange) =
+    val (enableGlassFloatingNavBar, onEnableGlassFloatingNavBarChange) =
         rememberPreference(
-            FloatingNavBarGlassEnabledKey,
+            EnableGlassFloatingNavBarKey,
             defaultValue = false,
         )
 
@@ -2027,22 +2026,25 @@ fun AppearanceSettings(
                     ),
                     Material3SettingsItem(
                         icon = painterResource(R.drawable.nav_bar),
-                        title = { Text("Glass on Floating Navigation Bar") },
-                        description = { Text("Use Glossy's liquid glass effect on the floating navigation bar") },
+                        title = { Text("Enable Glass on Floating Navigation Bar") },
+                        description = { Text("Use SimpMusic-style backdrop liquid glass") },
                         trailingContent = {
                             Switch(
-                                checked = floatingNavBarGlassEnabled,
-                                onCheckedChange = onFloatingNavBarGlassEnabledChange,
+                                checked = enableGlassFloatingNavBar,
+                                onCheckedChange = onEnableGlassFloatingNavBarChange,
                                 thumbContent = {
                                     Icon(
-                                        painter = painterResource(id = if (floatingNavBarGlassEnabled) R.drawable.check else R.drawable.close),
+                                        painter =
+                                            painterResource(
+                                                id = if (enableGlassFloatingNavBar) R.drawable.check else R.drawable.close,
+                                            ),
                                         contentDescription = null,
                                         modifier = Modifier.size(SwitchDefaults.IconSize),
                                     )
                                 },
                             )
                         },
-                        onClick = { onFloatingNavBarGlassEnabledChange(!floatingNavBarGlassEnabled) },
+                        onClick = { onEnableGlassFloatingNavBarChange(!enableGlassFloatingNavBar) },
                     ),
                     Material3SettingsItem(
                         icon = painterResource(R.drawable.group_outlined),
