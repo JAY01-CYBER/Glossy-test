@@ -5,6 +5,7 @@ package com.jay.glossy.ui.component
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -39,6 +40,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -264,13 +266,35 @@ private fun FloatingAppNavigationBar(
         }
     }
 
-    val barHeight = if (slimNav) 48.dp else 56.dp 
-    val fabSize = if (slimNav) 48.dp else 56.dp 
+    val barHeight = if (slimNav) 48.dp else 56.dp
+    val fabSize = if (slimNav) 48.dp else 56.dp
+
+    // Rubber interaction belongs to the complete floating navigation surface.
+    // The main pill and the detached Search FAB therefore scale together.
+    var navPressed by remember { mutableStateOf(false) }
+    val navScale by animateFloatAsState(
+        targetValue = if (navPressed) 1.15f else 1f,
+        animationSpec = spring(
+            dampingRatio = 0.62f,
+            stiffness = 520f,
+        ),
+        label = "FloatingNavRubberScale",
+    )
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 12.dp, bottom = 8.dp), 
+            .padding(top = 12.dp, bottom = 8.dp)
+            .graphicsLayer {
+                scaleX = navScale
+                scaleY = navScale
+            }
+            .pointerInput(Unit) {
+                detectPress {
+                    navPressed = true
+                }
+                navPressed = false
+            },
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -490,12 +514,7 @@ private fun MaterialLiquidTabBar(
                         )
                 } else Modifier
             )
-            .pointerInput(dampedDrag) {
-                detectPress {
-                    dampedDrag.press()
-                }
-                dampedDrag.release()
-            }
+            .then(dampedDrag.modifier)
             .then(
                 if (backdrop != null && glassLayer != null) {
                     Modifier.drawInteractiveGlass(
@@ -521,13 +540,9 @@ private fun MaterialLiquidTabBar(
         Box(
             Modifier
                 .graphicsLayer {
+                    // The outer floating navigation surface owns the rubber scale.
+                    // The selected indicator only follows the tab position.
                     translationX = dampedDrag.value * tabWidthPx
-                    scaleX = dampedDrag.scaleX
-                    scaleY = dampedDrag.scaleY
-                    
-                    val velocity = dampedDrag.velocity / 10f
-                    scaleX /= 1f - (velocity * 0.75f).coerceIn(-0.2f, 0.2f)
-                    scaleY *= 1f - (velocity * 0.25f).coerceIn(-0.2f, 0.2f)
                     alpha = indicatorOpacity
                 }
                 .width(tabWidth)
@@ -572,9 +587,7 @@ private fun MaterialLiquidTabBar(
 
         // Icons and Labels Row
         Row(
-            Modifier
-                .fillMaxSize()
-                .then(dampedDrag.modifier), 
+            Modifier.fillMaxSize(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             tabs.forEachIndexed { position, screen ->
