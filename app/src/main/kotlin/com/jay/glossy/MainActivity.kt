@@ -674,6 +674,10 @@ class MainActivity : ComponentActivity() {
                 EnableGlassFloatingNavBarKey,
                 defaultValue = false,
             )
+            val (useFloatingNavBar) = rememberPreference(
+                UseFloatingNavBarKey,
+                defaultValue = true,
+            )
             val navigationBackdrop = rememberBackdrop(
                 if (pureBlack) Color.Black else MaterialTheme.colorScheme.background,
             )
@@ -738,7 +742,6 @@ class MainActivity : ComponentActivity() {
                     navigationItems.mapIndexed { i, s -> s.route to i }.toMap()
                 }
                 val (slimNav) = rememberPreference(SlimNavBarKey, defaultValue = false)
-                val (useFloatingNavBar) = rememberPreference(UseFloatingNavBarKey, defaultValue = true)
                 val (useNewMiniPlayerDesign) = rememberPreference(UseNewMiniPlayerDesignKey, defaultValue = true)
                 val (defaultOpenTabInt) = rememberPreference(DefaultOpenTabKey, defaultValue = NavigationTab.HOME.name)
                 val defaultOpenTab = remember(defaultOpenTabInt) {
