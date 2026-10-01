@@ -34,7 +34,9 @@ class EqualizerService @Inject constructor() {
      * This should be called when ExoPlayer is initialized
      */
     @OptIn(UnstableApi::class)
+    @Synchronized
     fun addAudioProcessor(processor: CustomEqualizerAudioProcessor) {
+        if (audioProcessors.contains(processor)) return
         audioProcessors.add(processor)
         Timber.tag(TAG).d("Audio processor added. Total: ${audioProcessors.size}")
 
@@ -52,6 +54,7 @@ class EqualizerService @Inject constructor() {
     /**
      * Remove an audio processor instance
      */
+    @Synchronized
     fun removeAudioProcessor(processor: CustomEqualizerAudioProcessor) {
         audioProcessors.remove(processor)
     }
@@ -61,6 +64,7 @@ class EqualizerService @Inject constructor() {
      * If audio processor is not set, stores as pending profile
      */
     @OptIn(UnstableApi::class)
+    @Synchronized
     fun applyProfile(profile: SavedEQProfile): Result<Unit> {
         if (audioProcessors.isEmpty()) {
             Timber.tag(TAG)
@@ -101,6 +105,7 @@ class EqualizerService @Inject constructor() {
      * If audio processor is not set, stores pending disable request
      */
     @OptIn(UnstableApi::class)
+    @Synchronized
     fun disable() {
         if (audioProcessors.isEmpty()) {
             Timber.tag(TAG).w("No audio processors set yet. Storing disable as pending")
@@ -125,6 +130,7 @@ class EqualizerService @Inject constructor() {
     /**
      * Check if audio processor is set
      */
+    @Synchronized
     fun isInitialized(): Boolean {
         return audioProcessors.isNotEmpty()
     }
@@ -133,6 +139,7 @@ class EqualizerService @Inject constructor() {
      * Check if equalizer is enabled
      */
     @OptIn(UnstableApi::class)
+    @Synchronized
     fun isEnabled(): Boolean {
         return audioProcessors.any { it.isEnabled() }
     }
