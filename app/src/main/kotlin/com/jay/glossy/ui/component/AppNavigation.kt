@@ -896,12 +896,3 @@ private fun floatingToolbarSelectedItemContainerColor(pureBlack: Boolean): Color
 private fun floatingToolbarSelectedItemContentColor(pureBlack: Boolean): Color = if (pureBlack) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
 @Composable
 private fun floatingToolbarItemContentColor(pureBlack: Boolean): Color = if (pureBlack) Color.White.copy(alpha = 0.82f) else MaterialTheme.colorScheme.onSurfaceVariant
-Glossy Kyant0-style Liquid Glass floating navigation patch
-Source base: Glossy-test-master (6)
-Replacement:
-app/src/main/kotlin/com/jay/glossy/ui/component/AppNavigation.kt
-
-Uses the existing io.github.kyant0:backdrop:2.0.1 dependency already present in Glossy.
-
-The glass surface is a separate visual layer from the navigation content, so press/rubber deformation does not scale the text/icons. The selected capsule translates but does not independently scale.
-Haze is not used for the floating glass surface in this patch; Kyant0 backdrop is the primary renderer.
