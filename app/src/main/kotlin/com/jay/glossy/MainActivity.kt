@@ -193,6 +193,8 @@ import com.jay.glossy.playback.queues.YouTubeQueue
 import com.jay.glossy.ui.component.AccountSettingsDialog
 import com.jay.glossy.ui.component.AppNavigationBar
 import com.jay.glossy.ui.component.BackgroundBlurBackdrop
+import com.jay.glossy.ui.component.layerBackdrop
+import com.jay.glossy.ui.component.rememberBackdrop
 import com.jay.glossy.ui.component.AppNavigationRail
 import com.jay.glossy.ui.component.BottomSheetMenu
 import com.jay.glossy.ui.component.BottomSheetPage
@@ -667,6 +669,8 @@ class MainActivity : ComponentActivity() {
             }
 
             CompositionLocalProvider(LocalDensity provides scaledDensity) {
+            val floatingNavBackdrop = rememberBackdrop()
+
             BoxWithConstraints(
                 modifier =
                     Modifier
@@ -1310,6 +1314,7 @@ class MainActivity : ComponentActivity() {
                                         pureBlack = pureBlack,
                                         slimNav = slimNav,
                                         onSearchLongClick = onSearchLongClick,
+                                        floatingNavBackdrop = floatingNavBackdrop,
                                         modifier =
                                             Modifier
                                                 .align(Alignment.BottomCenter)
@@ -1370,7 +1375,12 @@ class MainActivity : ComponentActivity() {
                                 .fillMaxSize()
                                 .nestedScroll(topAppBarScrollBehavior.nestedScrollConnection),
                     ) {
-                        Row(Modifier.fillMaxSize()) {
+                        Row(
+                            Modifier
+                                .fillMaxSize()
+                                .graphicsLayer()
+                                .layerBackdrop(floatingNavBackdrop),
+                        ) {
                             val onRailItemClick: (Screens, Boolean) -> Unit =
                                 remember(navController, coroutineScope, topAppBarScrollBehavior, playerBottomSheetState) {
                                     { screen: Screens, isSelected: Boolean ->
