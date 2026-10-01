@@ -29,7 +29,6 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -57,8 +56,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jay.glossy.constants.UseFloatingNavBarKey
+import com.jay.glossy.constants.FloatingNavBarGlassEnabledKey
 import com.jay.glossy.ui.screens.Screens
 import com.jay.glossy.utils.rememberPreference
+import com.kyant.backdrop.Backdrop
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlin.math.roundToInt
@@ -173,9 +174,11 @@ fun AppNavigationBar(
     modifier: Modifier = Modifier,
     pureBlack: Boolean = false,
     slimNav: Boolean = false,
-    onSearchLongClick: (() -> Unit)? = null
+    onSearchLongClick: (() -> Unit)? = null,
+    floatingNavBackdrop: Backdrop? = null,
 ) {
     val (useFloatingNavBar) = rememberPreference(UseFloatingNavBarKey, defaultValue = true)
+    val (floatingNavGlassEnabled) = rememberPreference(FloatingNavBarGlassEnabledKey, defaultValue = false)
 
     if (useFloatingNavBar) {
         FloatingAppNavigationBar(
@@ -185,7 +188,9 @@ fun AppNavigationBar(
             modifier = modifier,
             pureBlack = pureBlack,
             slimNav = slimNav,
-            onSearchLongClick = onSearchLongClick
+            onSearchLongClick = onSearchLongClick,
+            glassEnabled = floatingNavGlassEnabled && floatingNavBackdrop != null,
+            backdrop = floatingNavBackdrop,
         )
     } else {
         StandardAppNavigationBar(
@@ -195,7 +200,7 @@ fun AppNavigationBar(
             modifier = modifier,
             pureBlack = pureBlack,
             slimNav = slimNav,
-            onSearchLongClick = onSearchLongClick
+            onSearchLongClick = onSearchLongClick,
         )
     }
 }
@@ -211,7 +216,9 @@ private fun FloatingAppNavigationBar(
     modifier: Modifier = Modifier,
     pureBlack: Boolean = false,
     slimNav: Boolean = false,
-    onSearchLongClick: (() -> Unit)? = null
+    onSearchLongClick: (() -> Unit)? = null,
+    glassEnabled: Boolean = false,
+    backdrop: Backdrop? = null,
 ) {
     val haptics = LocalHapticFeedback.current
     val viewConfiguration = LocalViewConfiguration.current
@@ -250,7 +257,9 @@ private fun FloatingAppNavigationBar(
             pureBlack = pureBlack,
             slimNav = slimNav,
             barHeight = barHeight,
-            onItemClick = onItemClick
+            onItemClick = onItemClick,
+            glassEnabled = glassEnabled,
+            backdrop = backdrop,
         )
 
         // 2. Detached Search FAB
@@ -286,23 +295,32 @@ private fun FloatingAppNavigationBar(
                 }
             }
 
-            Surface(
-                onClick = {
-                    if (onSearchLongClick == null) {
-                        onItemClick(searchItem, currentIsSearchSelected)
+            Box(
+                modifier = Modifier
+                    .size(fabSize)
+                    .shadow(12.dp, CircleShape)
+                    .clip(CircleShape)
+                    .let { base ->
+                        if (glassEnabled && backdrop != null) {
+                            base.liquidGlass(backdrop, CircleShape, isInteractive = false)
+                        } else {
+                            base.background(
+                                if (isSearchSelected) floatingToolbarSelectedItemContainerColor(pureBlack)
+                                else floatingToolbarFabContainerColor(pureBlack)
+                            )
+                        }
                     }
-                },
-                interactionSource = interactionSource,
-                shape = CircleShape,
-                color = if (isSearchSelected) floatingToolbarSelectedItemContainerColor(pureBlack) else floatingToolbarFabContainerColor(pureBlack),
-                contentColor = if (isSearchSelected) floatingToolbarSelectedItemContentColor(pureBlack) else floatingToolbarFabContentColor(pureBlack),
-                shadowElevation = 12.dp,
-                modifier = Modifier.size(fabSize) 
+                    .clickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                        role = Role.Button,
+                    ) {
+                        if (onSearchLongClick == null) {
+                            onItemClick(searchItem, currentIsSearchSelected)
+                        }
+                    },
+                contentAlignment = Alignment.Center,
             ) {
-                Box(
-                    contentAlignment = Alignment.Center, 
-                    modifier = Modifier.fillMaxSize()
-                ) {
                     Icon(
                         painter = painterResource(id = if (isSearchSelected) searchItem.iconIdActive else searchItem.iconIdInactive),
                         contentDescription = stringResource(searchItem.titleId),
@@ -324,7 +342,9 @@ private fun MaterialLiquidTabBar(
     pureBlack: Boolean,
     slimNav: Boolean,
     barHeight: androidx.compose.ui.unit.Dp,
-    onItemClick: (Screens, Boolean) -> Unit
+    onItemClick: (Screens, Boolean) -> Unit,
+    glassEnabled: Boolean = false,
+    backdrop: Backdrop? = null,
 ) {
     val tabsCount = tabs.size
     
@@ -384,13 +404,26 @@ private fun MaterialLiquidTabBar(
         dampedDrag.animateToValue(selectedIndex.toFloat())
     }
 
+    val glassShape = RoundedCornerShape(50)
+    val containerModifier = Modifier
+        .height(barHeight)
+        .width(totalWidth)
+        .shadow(elevation = 12.dp, shape = glassShape)
+        .clip(glassShape)
+        .let { base ->
+            if (glassEnabled && backdrop != null) {
+                base.liquidGlass(
+                    backdrop = backdrop,
+                    shape = glassShape,
+                    isInteractive = false,
+                )
+            } else {
+                base.background(floatingToolbarContainerColor(pureBlack))
+            }
+        }
+
     Box(
-        modifier = Modifier
-            .height(barHeight)
-            .width(totalWidth)
-            .shadow(elevation = 12.dp, shape = RoundedCornerShape(50)) 
-            .clip(RoundedCornerShape(50))
-            .background(floatingToolbarContainerColor(pureBlack)),
+        modifier = containerModifier,
         contentAlignment = Alignment.CenterStart
     ) {
         val indicatorOpacity by animateFloatAsState(targetValue = if (isMainTabActive) 1f else 0f, label = "Opacity")
