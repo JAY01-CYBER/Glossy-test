@@ -61,6 +61,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import dev.chrisbanes.haze.HazeInput
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.blur.hazeBlur
+import dev.chrisbanes.haze.blur.materials.HazeMaterials
+import dev.chrisbanes.haze.rememberHazeState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.Badge
@@ -681,6 +686,11 @@ class MainActivity : ComponentActivity() {
             val navigationBackdrop = rememberBackdrop(
                 if (pureBlack) Color.Black else MaterialTheme.colorScheme.background,
             )
+            // Haze captures the actual rendered navigation content and supplies the
+            // source-backed blur used by the floating glass surfaces. The Kyant backdrop
+            // remains responsible for the refraction/highlight layer; Haze provides the
+            // strong frosted blur visible in SimpMusic.
+            val navigationHazeState = rememberHazeState()
 
             BoxWithConstraints(
                 modifier =
@@ -1329,6 +1339,7 @@ class MainActivity : ComponentActivity() {
                                         slimNav = slimNav,
                                         onSearchLongClick = onSearchLongClick,
                                         backdrop = if (glassFloatingNavEnabled && useFloatingNavBar) navigationBackdrop else null,
+                                        hazeState = if (glassFloatingNavEnabled && useFloatingNavBar) navigationHazeState else null,
                                         modifier =
                                             Modifier
                                                 .align(Alignment.BottomCenter)
@@ -1432,7 +1443,11 @@ class MainActivity : ComponentActivity() {
                                     onSearchLongClick = onRailSearchLongClick,
                                 )
                             }
-                            Box(Modifier.weight(1f)) {
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .hazeSource(navigationHazeState),
+                            ) {
                                 NavHost(
                                     navController = navController,
                                     startDestination =
