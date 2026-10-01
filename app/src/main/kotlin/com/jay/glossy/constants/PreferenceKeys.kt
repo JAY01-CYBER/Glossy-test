@@ -56,6 +56,7 @@ enum class DensityScale(
 val DefaultOpenTabKey = stringPreferencesKey("defaultOpenTab")
 val SlimNavBarKey = booleanPreferencesKey("slimNavBar")
 val UseFloatingNavBarKey = booleanPreferencesKey("useFloatingNavBar")
+val FloatingNavBarGlassEnabledKey = booleanPreferencesKey("floatingNavBarGlassEnabled")
 
 // App-wide background blur (frosted gradient backdrop behind Home/Library/etc.)
 val BackgroundBlurEnabledKey = booleanPreferencesKey("backgroundBlurEnabled")
