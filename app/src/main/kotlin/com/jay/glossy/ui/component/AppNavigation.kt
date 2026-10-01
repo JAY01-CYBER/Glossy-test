@@ -4,6 +4,7 @@ package com.jay.glossy.ui.component
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -46,9 +48,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalViewConfiguration
@@ -57,11 +60,26 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.scale
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.colorControls
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
+import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.shadow.InnerShadow
+import com.kyant.backdrop.shadow.Shadow
+import com.jay.glossy.constants.EnableGlassFloatingNavBarKey
 import com.jay.glossy.constants.UseFloatingNavBarKey
 import com.jay.glossy.ui.screens.Screens
 import com.jay.glossy.utils.rememberPreference
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.collectLatest
+import dev.chrisbanes.haze.HazeInput
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.blur.hazeBlur
+import dev.chrisbanes.haze.blur.materials.HazeMaterials
 import kotlin.math.roundToInt
 
 @Immutable
@@ -98,6 +116,7 @@ fun AppNavigationRail(
     val containerColor = if (pureBlack) Color.Black else MaterialTheme.colorScheme.surfaceContainer
     val haptics = LocalHapticFeedback.current
     val viewConfiguration = LocalViewConfiguration.current
+
 
     NavigationRail(
         modifier = modifier,
@@ -174,7 +193,9 @@ fun AppNavigationBar(
     modifier: Modifier = Modifier,
     pureBlack: Boolean = false,
     slimNav: Boolean = false,
-    onSearchLongClick: (() -> Unit)? = null
+    onSearchLongClick: (() -> Unit)? = null,
+    backdrop: com.kyant.backdrop.Backdrop? = null,
+    hazeState: HazeState? = null,
 ) {
     val (useFloatingNavBar) = rememberPreference(UseFloatingNavBarKey, defaultValue = true)
 
@@ -186,7 +207,9 @@ fun AppNavigationBar(
             modifier = modifier,
             pureBlack = pureBlack,
             slimNav = slimNav,
-            onSearchLongClick = onSearchLongClick
+            onSearchLongClick = onSearchLongClick,
+            backdrop = backdrop,
+            hazeState = hazeState,
         )
     } else {
         StandardAppNavigationBar(
@@ -212,10 +235,19 @@ private fun FloatingAppNavigationBar(
     modifier: Modifier = Modifier,
     pureBlack: Boolean = false,
     slimNav: Boolean = false,
-    onSearchLongClick: (() -> Unit)? = null
+    onSearchLongClick: (() -> Unit)? = null,
+    backdrop: com.kyant.backdrop.Backdrop? = null,
+    hazeState: HazeState? = null,
 ) {
     val haptics = LocalHapticFeedback.current
     val viewConfiguration = LocalViewConfiguration.current
+
+    val (glassEnabled) = rememberPreference(
+        EnableGlassFloatingNavBarKey,
+        defaultValue = false,
+    )
+    val glassLayer = rememberGraphicsLayer()
+    val glassLuminance = 0.5f
 
     val searchItem = navigationItems.find { it == Screens.Search }
     val mainItems = navigationItems.filter { it != Screens.Search }
@@ -251,7 +283,11 @@ private fun FloatingAppNavigationBar(
             pureBlack = pureBlack,
             slimNav = slimNav,
             barHeight = barHeight,
-            onItemClick = onItemClick
+            onItemClick = onItemClick,
+            backdrop = if (glassEnabled) backdrop else null,
+            hazeState = if (glassEnabled) hazeState else null,
+            glassLayer = glassLayer,
+            luminance = glassLuminance,
         )
 
         // 2. Detached Search FAB
@@ -287,28 +323,74 @@ private fun FloatingAppNavigationBar(
                 }
             }
 
-            Surface(
-                onClick = {
-                    if (onSearchLongClick == null) {
-                        onItemClick(searchItem, currentIsSearchSelected)
+            val searchModifier = Modifier
+                .size(fabSize)
+                .then(
+                    if (glassEnabled && hazeState != null) {
+                        Modifier
+                            .clip(CircleShape)
+                            .hazeBlur(
+                                input = HazeInput.Sources(hazeState),
+                                style = HazeMaterials.ultraThin(),
+                                // Keep Haze's render layer exactly inside the FAB bounds.
+                                // The default (true) expands the layer by the blur radius,
+                                // which creates the unwanted rectangular blur outside the button.
+                                expandLayerBounds = false,
+                            )
+                    } else Modifier
+                )
+                .then(
+                    if (glassEnabled && backdrop != null) {
+                        Modifier.drawInteractiveGlass(
+                            isDark = pureBlack,
+                            backdrop = backdrop,
+                            layer = glassLayer,
+                            luminanceAnimation = glassLuminance,
+                            shape = CircleShape,
+                            interaction = rememberGlassInteraction(),
+                        )
+                    } else {
+                        Modifier
                     }
-                },
-                interactionSource = interactionSource,
-                shape = CircleShape,
-                color = if (isSearchSelected) floatingToolbarSelectedItemContainerColor(pureBlack) else floatingToolbarFabContainerColor(pureBlack),
-                contentColor = if (isSearchSelected) floatingToolbarSelectedItemContentColor(pureBlack) else floatingToolbarFabContentColor(pureBlack),
-                shadowElevation = 12.dp,
-                modifier = Modifier.size(fabSize) 
-            ) {
+                )
+
+            if (glassEnabled && backdrop != null) {
                 Box(
-                    contentAlignment = Alignment.Center, 
-                    modifier = Modifier.fillMaxSize()
+                    modifier = searchModifier.clickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                    ) {
+                        if (onSearchLongClick == null) onItemClick(searchItem, currentIsSearchSelected)
+                    },
+                    contentAlignment = Alignment.Center,
                 ) {
                     Icon(
                         painter = painterResource(id = if (isSearchSelected) searchItem.iconIdActive else searchItem.iconIdInactive),
                         contentDescription = stringResource(searchItem.titleId),
-                        modifier = Modifier.size(24.dp) 
+                        modifier = Modifier.size(24.dp),
+                        tint = if (isSearchSelected) floatingToolbarSelectedItemContentColor(pureBlack)
+                        else floatingToolbarFabContentColor(pureBlack),
                     )
+                }
+            } else {
+                Surface(
+                    onClick = {
+                        if (onSearchLongClick == null) onItemClick(searchItem, currentIsSearchSelected)
+                    },
+                    interactionSource = interactionSource,
+                    shape = CircleShape,
+                    color = if (isSearchSelected) floatingToolbarSelectedItemContainerColor(pureBlack) else floatingToolbarFabContainerColor(pureBlack),
+                    contentColor = if (isSearchSelected) floatingToolbarSelectedItemContentColor(pureBlack) else floatingToolbarFabContentColor(pureBlack),
+                    shadowElevation = 12.dp,
+                    modifier = Modifier.size(fabSize),
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            painter = painterResource(id = if (isSearchSelected) searchItem.iconIdActive else searchItem.iconIdInactive),
+                            contentDescription = stringResource(searchItem.titleId),
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
                 }
             }
         }
@@ -325,7 +407,11 @@ private fun MaterialLiquidTabBar(
     pureBlack: Boolean,
     slimNav: Boolean,
     barHeight: androidx.compose.ui.unit.Dp,
-    onItemClick: (Screens, Boolean) -> Unit
+    onItemClick: (Screens, Boolean) -> Unit,
+    backdrop: com.kyant.backdrop.Backdrop? = null,
+    hazeState: HazeState? = null,
+    glassLayer: GraphicsLayer? = null,
+    luminance: Float = 0.5f,
 ) {
     val tabsCount = tabs.size
     
@@ -385,16 +471,24 @@ private fun MaterialLiquidTabBar(
         dampedDrag.animateToValue(selectedIndex.toFloat())
     }
 
+    val capsuleShape = RoundedCornerShape(50)
     Box(
         modifier = Modifier
             .height(barHeight)
             .width(totalWidth)
-            .shadow(elevation = 12.dp, shape = RoundedCornerShape(50)) 
-            .clip(RoundedCornerShape(50))
-            .background(floatingToolbarContainerColor(pureBlack))
-            // Keep the original press physics alive even on a stationary long-press.
-            // DampedDragAnimation used to enter its pressed state only after drag
-            // detection, so a simple touch-and-hold no longer produced the rubber stretch.
+            .then(
+                if (hazeState != null) {
+                    Modifier
+                        .clip(capsuleShape)
+                        .hazeBlur(
+                            input = HazeInput.Sources(hazeState),
+                            style = HazeMaterials.ultraThin(),
+                            // Do not expand the render layer beyond the floating pill.
+                            // This keeps the backdrop blur physically confined to the nav surface.
+                            expandLayerBounds = false,
+                        )
+                } else Modifier
+            )
             .pointerInput(dampedDrag) {
                 while (true) {
                     detectPress {
@@ -402,7 +496,24 @@ private fun MaterialLiquidTabBar(
                     }
                     dampedDrag.release()
                 }
-            },
+            }
+            .then(
+                if (backdrop != null && glassLayer != null) {
+                    Modifier.drawInteractiveGlass(
+                        isDark = pureBlack,
+                        backdrop = backdrop,
+                        layer = glassLayer,
+                        luminanceAnimation = luminance,
+                        shape = capsuleShape,
+                        interaction = rememberGlassInteraction(),
+                    )
+                } else {
+                    Modifier
+                        .shadow(elevation = 12.dp, shape = capsuleShape)
+                        .clip(capsuleShape)
+                        .background(floatingToolbarContainerColor(pureBlack))
+                }
+            ),
         contentAlignment = Alignment.CenterStart
     ) {
         val indicatorOpacity by animateFloatAsState(targetValue = if (isMainTabActive) 1f else 0f, label = "Opacity")
@@ -422,9 +533,42 @@ private fun MaterialLiquidTabBar(
                 }
                 .width(tabWidth)
                 .height(blobHeight)
-                .padding(horizontal = 6.dp) 
-                .clip(RoundedCornerShape(50))
-                .background(floatingToolbarSelectedItemContainerColor(pureBlack))
+                .padding(horizontal = 6.dp)
+                .then(
+                    if (backdrop != null) {
+                        Modifier.drawBackdrop(
+                            backdrop = backdrop,
+                            shape = { RoundedCornerShape(50) },
+                            effects = {
+                                val l = (luminance * 2f - 1f).let { kotlin.math.sign(it) * it * it }
+                                val progress = dampedDrag.pressProgress
+                                vibrancy()
+                                colorControls(brightness = 0.05f, contrast = 1f, saturation = 1.5f)
+                                blur(
+                                    (if (l > 0f) androidx.compose.ui.util.lerp(8f.dp.toPx(), 16f.dp.toPx(), l)
+                                    else androidx.compose.ui.util.lerp(8f.dp.toPx(), 2f.dp.toPx(), -l)) + 20f.dp.toPx()
+                                )
+                                lens(10f.dp.toPx() * progress, 14f.dp.toPx() * progress, chromaticAberration = true)
+                            },
+                            highlight = { Highlight.Default.copy(alpha = 0.6f) },
+                            shadow = { Shadow(radius = 4f.dp, alpha = 0.4f) },
+                            innerShadow = {
+                                val progress = dampedDrag.pressProgress
+                                InnerShadow(radius = 8f.dp * progress, alpha = progress)
+                            },
+                            onDrawSurface = {
+                                val lumNorm = ((luminance - 0.3f) / 0.5f).coerceIn(0f, 1f)
+                                val darken = if (pureBlack) androidx.compose.ui.util.lerp(0.22f, 0.55f, lumNorm)
+                                else androidx.compose.ui.util.lerp(0.06f, 0.14f, lumNorm)
+                                drawRect(Color.Black.copy(alpha = darken))
+                            },
+                        )
+                    } else {
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(floatingToolbarSelectedItemContainerColor(pureBlack))
+                    }
+                )
         )
 
         // Icons and Labels Row
