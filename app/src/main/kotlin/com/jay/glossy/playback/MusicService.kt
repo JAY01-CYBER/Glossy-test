@@ -37,6 +37,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.LruCache
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.datastore.preferences.core.Preferences
@@ -525,9 +526,11 @@ class MusicService :
     private var isAudioEffectSessionOpened = false
     private var openedAudioEffectSessionId: Int = C.AUDIO_SESSION_ID_UNSET
     private val playerNormalizationProcessors = HashMap<Player, VolumeNormalizationAudioProcessor>()
+    private val playerEqualizerProcessors = HashMap<Player, CustomEqualizerAudioProcessor>()
     private val nativeAudioProcessors = HashMap<Player, NativeAudioProcessor>()
     private val crossfadeFilterProcessors = HashMap<Player, CrossfadeFilterAudioProcessor>()
-    private val audioFeatureCache = HashMap<String, AudioFeatures>()
+    // Bounded cache: AutoMix analysis must not grow with playlist history.
+    private val audioFeatureCache = object : LruCache<String, AudioFeatures>(256) {}
 
     private var loudnessSetupJob: Job? = null
     private var loudnessSetupGeneration: Long = 0L
@@ -1578,6 +1581,7 @@ class MusicService :
                 .build()
 
         playerNormalizationProcessors[player] = normalizationProcessor
+        playerEqualizerProcessors[player] = eqProcessor
         playerSilenceProcessors[player] = silenceProcessor
         nativeAudioProcessors[player] = playerNativeAudioProcessor
         crossfadeFilterProcessors[player] = playerCrossfadeFilterProcessor
@@ -4366,6 +4370,9 @@ class MusicService :
         mediaSession?.release()
         player.removeListener(this)
         sleepTimer?.let { player.removeListener(it) }
+        playerEqualizerProcessors.remove(player)?.let { eq ->
+            runCatching { equalizerService.removeAudioProcessor(eq) }
+        }
         playerNormalizationProcessors.remove(player)
         playerSilenceProcessors.remove(player)
         crossfadeFilterProcessors.remove(player)
@@ -5152,11 +5159,14 @@ class MusicService :
         secondaryPlayer?.let { secPlayer ->
             runCatching { secPlayer.stop() }
             runCatching { secPlayer.clearMediaItems() }
-            runCatching { secPlayer.release() }
+            playerEqualizerProcessors.remove(secPlayer)?.let { eq ->
+                runCatching { equalizerService.removeAudioProcessor(eq) }
+            }
             playerNormalizationProcessors.remove(secPlayer)
             playerSilenceProcessors.remove(secPlayer)
             crossfadeFilterProcessors.remove(secPlayer)
-                        nativeAudioProcessors.remove(secPlayer)
+            nativeAudioProcessors.remove(secPlayer)
+            runCatching { secPlayer.release() }
         }
         secondaryPlayer = null
         secondaryPrewarmed = false
@@ -5351,10 +5361,13 @@ class MusicService :
 
     private fun cleanupCrossfade(fadingPlayerSessionId: Int = C.AUDIO_SESSION_ID_UNSET) {
         fadingPlayer?.let {
+            playerEqualizerProcessors.remove(it)?.let { eq ->
+                runCatching { equalizerService.removeAudioProcessor(eq) }
+            }
             playerNormalizationProcessors.remove(it)
             playerSilenceProcessors.remove(it)
             crossfadeFilterProcessors.remove(it)
-                        nativeAudioProcessors.remove(it)
+            nativeAudioProcessors.remove(it)
         }
         fadingPlayer?.stop()
         fadingPlayer?.clearMediaItems()
