@@ -1527,7 +1527,7 @@ class MusicService :
         nativeAudioProcessor = playerNativeAudioProcessor
         val playerCrossfadeFilterProcessor = CrossfadeFilterAudioProcessor { mediaId, features ->
             scope.launch(Dispatchers.Main.immediate) {
-                audioFeatureCache[mediaId] = features
+                audioFeatureCache.put(mediaId, features)
                 Timber.tag(TAG).d("AutoMix analysis: $mediaId bpm=${features.bpm}, key=${features.key} ${features.keyScale}")
                 if (crossfadeStyle == CrossfadeStyle.AUTO_MIX && ::player.isInitialized && player.currentMediaItem?.mediaId != null) {
                     scheduleCrossfade()
