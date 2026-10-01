@@ -327,10 +327,16 @@ private fun FloatingAppNavigationBar(
                 .size(fabSize)
                 .then(
                     if (glassEnabled && hazeState != null) {
-                        Modifier.hazeBlur(
-                            input = HazeInput.Sources(hazeState),
-                            style = HazeMaterials.ultraThin(),
-                        )
+                        Modifier
+                            .clip(CircleShape)
+                            .hazeBlur(
+                                input = HazeInput.Sources(hazeState),
+                                style = HazeMaterials.ultraThin(),
+                                // Keep Haze's render layer exactly inside the FAB bounds.
+                                // The default (true) expands the layer by the blur radius,
+                                // which creates the unwanted rectangular blur outside the button.
+                                expandLayerBounds = false,
+                            )
                     } else Modifier
                 )
                 .then(
@@ -472,10 +478,15 @@ private fun MaterialLiquidTabBar(
             .width(totalWidth)
             .then(
                 if (hazeState != null) {
-                    Modifier.hazeBlur(
-                        input = HazeInput.Sources(hazeState),
-                        style = HazeMaterials.ultraThin(),
-                    )
+                    Modifier
+                        .clip(capsuleShape)
+                        .hazeBlur(
+                            input = HazeInput.Sources(hazeState),
+                            style = HazeMaterials.ultraThin(),
+                            // Do not expand the render layer beyond the floating pill.
+                            // This keeps the backdrop blur physically confined to the nav surface.
+                            expandLayerBounds = false,
+                        )
                 } else Modifier
             )
             .then(
