@@ -76,6 +76,10 @@ import com.jay.glossy.utils.rememberPreference
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.collectLatest
+import dev.chrisbanes.haze.HazeInput
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.blur.hazeBlur
+import dev.chrisbanes.haze.blur.materials.HazeMaterials
 import kotlin.math.roundToInt
 
 @Immutable
@@ -191,6 +195,7 @@ fun AppNavigationBar(
     slimNav: Boolean = false,
     onSearchLongClick: (() -> Unit)? = null,
     backdrop: com.kyant.backdrop.Backdrop? = null,
+    hazeState: HazeState? = null,
 ) {
     val (useFloatingNavBar) = rememberPreference(UseFloatingNavBarKey, defaultValue = true)
 
@@ -204,6 +209,7 @@ fun AppNavigationBar(
             slimNav = slimNav,
             onSearchLongClick = onSearchLongClick,
             backdrop = backdrop,
+            hazeState = hazeState,
         )
     } else {
         StandardAppNavigationBar(
@@ -231,6 +237,7 @@ private fun FloatingAppNavigationBar(
     slimNav: Boolean = false,
     onSearchLongClick: (() -> Unit)? = null,
     backdrop: com.kyant.backdrop.Backdrop? = null,
+    hazeState: HazeState? = null,
 ) {
     val haptics = LocalHapticFeedback.current
     val viewConfiguration = LocalViewConfiguration.current
@@ -278,6 +285,7 @@ private fun FloatingAppNavigationBar(
             barHeight = barHeight,
             onItemClick = onItemClick,
             backdrop = if (glassEnabled) backdrop else null,
+            hazeState = if (glassEnabled) hazeState else null,
             glassLayer = glassLayer,
             luminance = glassLuminance,
         )
@@ -317,6 +325,14 @@ private fun FloatingAppNavigationBar(
 
             val searchModifier = Modifier
                 .size(fabSize)
+                .then(
+                    if (glassEnabled && hazeState != null) {
+                        Modifier.hazeBlur(
+                            input = HazeInput.Sources(hazeState),
+                            style = HazeMaterials.ultraThin().then { blurEnabled(true) },
+                        )
+                    } else Modifier
+                )
                 .then(
                     if (glassEnabled && backdrop != null) {
                         Modifier.drawInteractiveGlass(
@@ -387,6 +403,7 @@ private fun MaterialLiquidTabBar(
     barHeight: androidx.compose.ui.unit.Dp,
     onItemClick: (Screens, Boolean) -> Unit,
     backdrop: com.kyant.backdrop.Backdrop? = null,
+    hazeState: HazeState? = null,
     glassLayer: GraphicsLayer? = null,
     luminance: Float = 0.5f,
 ) {
@@ -453,6 +470,14 @@ private fun MaterialLiquidTabBar(
         modifier = Modifier
             .height(barHeight)
             .width(totalWidth)
+            .then(
+                if (hazeState != null) {
+                    Modifier.hazeBlur(
+                        input = HazeInput.Sources(hazeState),
+                        style = HazeMaterials.ultraThin().then { blurEnabled(true) },
+                    )
+                } else Modifier
+            )
             .then(
                 if (backdrop != null && glassLayer != null) {
                     Modifier.drawInteractiveGlass(
