@@ -6,6 +6,7 @@ androidxTestCore = "1.7.0"
 json = "20260719"
 kotlin = "2.4.10"
 compose = "1.11.4"
+haze = "2.0.1"
 lifecycle = "2.11.0"
 material3 = "1.5.0-alpha25"
 appcompat = "1.7.1"
@@ -77,6 +78,9 @@ coil = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 ucrop = { module = "com.github.yalantis:ucrop", version.ref = "ucrop" }
 
+haze = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }
+haze-blur = { module = "dev.chrisbanes.haze:haze-blur", version.ref = "haze" }
+haze-materials = { module = "dev.chrisbanes.haze:haze-materials", version.ref = "haze" }
 shimmer = { module = "com.valentinilk.shimmer:compose-shimmer", version.ref = "shimmer" }
 
 # Both Palettes
