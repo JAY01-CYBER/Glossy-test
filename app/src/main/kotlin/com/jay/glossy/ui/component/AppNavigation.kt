@@ -235,6 +235,13 @@ private fun FloatingAppNavigationBar(
     val haptics = LocalHapticFeedback.current
     val viewConfiguration = LocalViewConfiguration.current
 
+    val (glassEnabled) = rememberPreference(
+        EnableGlassFloatingNavBarKey,
+        defaultValue = false,
+    )
+    val glassLayer = rememberGraphicsLayer()
+    val glassLuminance = 0.5f
+
     val searchItem = navigationItems.find { it == Screens.Search }
     val mainItems = navigationItems.filter { it != Screens.Search }
 
@@ -272,7 +279,7 @@ private fun FloatingAppNavigationBar(
             onItemClick = onItemClick,
             backdrop = if (glassEnabled) backdrop else null,
             glassLayer = glassLayer,
-            luminance = glassLuminance.value,
+            luminance = glassLuminance,
         )
 
         // 2. Detached Search FAB
@@ -316,7 +323,7 @@ private fun FloatingAppNavigationBar(
                             isDark = pureBlack,
                             backdrop = backdrop,
                             layer = glassLayer,
-                            luminanceAnimation = glassLuminance.value,
+                            luminanceAnimation = glassLuminance,
                             shape = CircleShape,
                             interaction = rememberGlassInteraction(),
                         )
