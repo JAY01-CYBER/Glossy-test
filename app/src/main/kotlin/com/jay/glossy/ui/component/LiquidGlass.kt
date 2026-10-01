@@ -91,6 +91,10 @@ fun Modifier.drawInteractiveGlass(
             
             lens(size.minDimension / 4f + 2f.dp.toPx() * press, size.minDimension / 2f, false)
         },
+        onDrawBackdrop = { drawBackdrop ->
+            drawBackdrop()
+            layer?.record { drawBackdrop() }
+        },
         layerBlock = {
             if (interaction != null) {
                 val width = size.width

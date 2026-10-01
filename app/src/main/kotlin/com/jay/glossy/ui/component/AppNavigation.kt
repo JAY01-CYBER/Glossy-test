@@ -3,7 +3,9 @@
 package com.jay.glossy.ui.component
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -20,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -29,6 +32,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -45,6 +49,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
@@ -55,14 +62,27 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.scale
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.colorControls
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
+import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.shadow.InnerShadow
+import com.kyant.backdrop.shadow.Shadow
+import com.jay.glossy.constants.EnableGlassFloatingNavBarKey
 import com.jay.glossy.constants.UseFloatingNavBarKey
-import com.jay.glossy.constants.FloatingNavBarGlassEnabledKey
 import com.jay.glossy.ui.screens.Screens
 import com.jay.glossy.utils.rememberPreference
-import com.kyant.backdrop.Backdrop
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
+import java.nio.IntBuffer
+import android.graphics.Bitmap
 
 @Immutable
 private data class NavItemState(
@@ -98,6 +118,38 @@ fun AppNavigationRail(
     val containerColor = if (pureBlack) Color.Black else MaterialTheme.colorScheme.surfaceContainer
     val haptics = LocalHapticFeedback.current
     val viewConfiguration = LocalViewConfiguration.current
+    val (glassEnabled) = rememberPreference(EnableGlassFloatingNavBarKey, defaultValue = false)
+    val glassLayer = rememberGraphicsLayer()
+    val glassLuminance = remember { Animatable(0.5f) }
+
+    LaunchedEffect(glassEnabled, glassLayer) {
+        if (!glassEnabled || backdrop == null) return@LaunchedEffect
+        val buffer = IntBuffer.allocate(25)
+        while (isActive) {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val bitmap = glassLayer.toImageBitmap().asAndroidBitmap()
+                        .scale(5, 5, false)
+                        .copy(Bitmap.Config.ARGB_8888, false)
+                    buffer.rewind()
+                    bitmap.copyPixelsToBuffer(buffer)
+                    bitmap.recycle()
+                }
+                val luminance = (0 until 25).sumOf { index ->
+                    val color = buffer.get(index)
+                    val r = (color shr 16 and 0xFF) / 255f
+                    val g = (color shr 8 and 0xFF) / 255f
+                    val b = (color and 0xFF) / 255f
+                    0.2126 * r + 0.7152 * g + 0.0722 * b
+                } / 25.0
+                glassLuminance.animateTo(
+                    luminance.coerceIn(0.3, 0.8).toFloat(),
+                    tween(500),
+                )
+            }
+            delay(1_000)
+        }
+    }
 
     NavigationRail(
         modifier = modifier,
@@ -175,10 +227,9 @@ fun AppNavigationBar(
     pureBlack: Boolean = false,
     slimNav: Boolean = false,
     onSearchLongClick: (() -> Unit)? = null,
-    floatingNavBackdrop: Backdrop? = null,
+    backdrop: com.kyant.backdrop.Backdrop? = null,
 ) {
     val (useFloatingNavBar) = rememberPreference(UseFloatingNavBarKey, defaultValue = true)
-    val (floatingNavGlassEnabled) = rememberPreference(FloatingNavBarGlassEnabledKey, defaultValue = false)
 
     if (useFloatingNavBar) {
         FloatingAppNavigationBar(
@@ -189,8 +240,7 @@ fun AppNavigationBar(
             pureBlack = pureBlack,
             slimNav = slimNav,
             onSearchLongClick = onSearchLongClick,
-            glassEnabled = floatingNavGlassEnabled && floatingNavBackdrop != null,
-            backdrop = floatingNavBackdrop,
+            backdrop = backdrop,
         )
     } else {
         StandardAppNavigationBar(
@@ -200,7 +250,7 @@ fun AppNavigationBar(
             modifier = modifier,
             pureBlack = pureBlack,
             slimNav = slimNav,
-            onSearchLongClick = onSearchLongClick,
+            onSearchLongClick = onSearchLongClick
         )
     }
 }
@@ -217,8 +267,7 @@ private fun FloatingAppNavigationBar(
     pureBlack: Boolean = false,
     slimNav: Boolean = false,
     onSearchLongClick: (() -> Unit)? = null,
-    glassEnabled: Boolean = false,
-    backdrop: Backdrop? = null,
+    backdrop: com.kyant.backdrop.Backdrop? = null,
 ) {
     val haptics = LocalHapticFeedback.current
     val viewConfiguration = LocalViewConfiguration.current
@@ -258,8 +307,9 @@ private fun FloatingAppNavigationBar(
             slimNav = slimNav,
             barHeight = barHeight,
             onItemClick = onItemClick,
-            glassEnabled = glassEnabled,
-            backdrop = backdrop,
+            backdrop = if (glassEnabled) backdrop else null,
+            glassLayer = glassLayer,
+            luminance = glassLuminance.value,
         )
 
         // 2. Detached Search FAB
@@ -295,41 +345,65 @@ private fun FloatingAppNavigationBar(
                 }
             }
 
-            Box(
-                modifier = Modifier
-                    .size(fabSize)
-                    .shadow(12.dp, CircleShape)
-                    .clip(CircleShape)
-                    .let { base ->
-                        if (glassEnabled && backdrop != null) {
-                            base.liquidGlass(backdrop, CircleShape, isInteractive = false)
-                        } else {
-                            base.background(
-                                if (isSearchSelected) floatingToolbarSelectedItemContainerColor(pureBlack)
-                                else floatingToolbarFabContainerColor(pureBlack)
-                            )
-                        }
+            val searchModifier = Modifier
+                .size(fabSize)
+                .then(
+                    if (glassEnabled && backdrop != null) {
+                        Modifier.drawInteractiveGlass(
+                            isDark = pureBlack,
+                            backdrop = backdrop,
+                            layer = glassLayer,
+                            luminanceAnimation = glassLuminance.value,
+                            shape = CircleShape,
+                            interaction = rememberGlassInteraction(),
+                        )
+                    } else {
+                        Modifier
                     }
-                    .clickable(
+                )
+
+            if (glassEnabled && backdrop != null) {
+                Box(
+                    modifier = searchModifier.clickable(
                         interactionSource = interactionSource,
                         indication = null,
-                        role = Role.Button,
                     ) {
-                        if (onSearchLongClick == null) {
-                            onItemClick(searchItem, currentIsSearchSelected)
-                        }
+                        if (onSearchLongClick == null) onItemClick(searchItem, currentIsSearchSelected)
                     },
-                contentAlignment = Alignment.Center,
-            ) {
+                    contentAlignment = Alignment.Center,
+                ) {
                     Icon(
                         painter = painterResource(id = if (isSearchSelected) searchItem.iconIdActive else searchItem.iconIdInactive),
                         contentDescription = stringResource(searchItem.titleId),
-                        modifier = Modifier.size(24.dp) 
+                        modifier = Modifier.size(24.dp),
+                        tint = if (isSearchSelected) floatingToolbarSelectedItemContentColor(pureBlack)
+                        else floatingToolbarFabContentColor(pureBlack),
                     )
+                }
+            } else {
+                Surface(
+                    onClick = {
+                        if (onSearchLongClick == null) onItemClick(searchItem, currentIsSearchSelected)
+                    },
+                    interactionSource = interactionSource,
+                    shape = CircleShape,
+                    color = if (isSearchSelected) floatingToolbarSelectedItemContainerColor(pureBlack) else floatingToolbarFabContainerColor(pureBlack),
+                    contentColor = if (isSearchSelected) floatingToolbarSelectedItemContentColor(pureBlack) else floatingToolbarFabContentColor(pureBlack),
+                    shadowElevation = 12.dp,
+                    modifier = Modifier.size(fabSize),
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            painter = painterResource(id = if (isSearchSelected) searchItem.iconIdActive else searchItem.iconIdInactive),
+                            contentDescription = stringResource(searchItem.titleId),
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
                 }
             }
         }
     }
+}
 
 @Composable
 private fun MaterialLiquidTabBar(
@@ -342,8 +416,9 @@ private fun MaterialLiquidTabBar(
     slimNav: Boolean,
     barHeight: androidx.compose.ui.unit.Dp,
     onItemClick: (Screens, Boolean) -> Unit,
-    glassEnabled: Boolean = false,
-    backdrop: Backdrop? = null,
+    backdrop: com.kyant.backdrop.Backdrop? = null,
+    glassLayer: GraphicsLayer? = null,
+    luminance: Float = 0.5f,
 ) {
     val tabsCount = tabs.size
     
@@ -403,26 +478,28 @@ private fun MaterialLiquidTabBar(
         dampedDrag.animateToValue(selectedIndex.toFloat())
     }
 
-    val glassShape = RoundedCornerShape(50)
-    val containerModifier = Modifier
-        .height(barHeight)
-        .width(totalWidth)
-        .shadow(elevation = 12.dp, shape = glassShape)
-        .clip(glassShape)
-        .let { base ->
-            if (glassEnabled && backdrop != null) {
-                base.liquidGlass(
-                    backdrop = backdrop,
-                    shape = glassShape,
-                    isInteractive = false,
-                )
-            } else {
-                base.background(floatingToolbarContainerColor(pureBlack))
-            }
-        }
-
+    val capsuleShape = RoundedCornerShape(50)
     Box(
-        modifier = containerModifier,
+        modifier = Modifier
+            .height(barHeight)
+            .width(totalWidth)
+            .then(
+                if (backdrop != null && glassLayer != null) {
+                    Modifier.drawInteractiveGlass(
+                        isDark = pureBlack,
+                        backdrop = backdrop,
+                        layer = glassLayer,
+                        luminanceAnimation = luminance,
+                        shape = capsuleShape,
+                        interaction = rememberGlassInteraction(),
+                    )
+                } else {
+                    Modifier
+                        .shadow(elevation = 12.dp, shape = capsuleShape)
+                        .clip(capsuleShape)
+                        .background(floatingToolbarContainerColor(pureBlack))
+                }
+            ),
         contentAlignment = Alignment.CenterStart
     ) {
         val indicatorOpacity by animateFloatAsState(targetValue = if (isMainTabActive) 1f else 0f, label = "Opacity")
@@ -442,9 +519,42 @@ private fun MaterialLiquidTabBar(
                 }
                 .width(tabWidth)
                 .height(blobHeight)
-                .padding(horizontal = 6.dp) 
-                .clip(RoundedCornerShape(50))
-                .background(floatingToolbarSelectedItemContainerColor(pureBlack))
+                .padding(horizontal = 6.dp)
+                .then(
+                    if (backdrop != null) {
+                        Modifier.drawBackdrop(
+                            backdrop = backdrop,
+                            shape = { RoundedCornerShape(50) },
+                            effects = {
+                                val l = (luminance * 2f - 1f).let { kotlin.math.sign(it) * it * it }
+                                val progress = dampedDrag.pressProgress
+                                vibrancy()
+                                colorControls(brightness = 0.05f, contrast = 1f, saturation = 1.5f)
+                                blur(
+                                    (if (l > 0f) androidx.compose.ui.util.lerp(8f.dp.toPx(), 16f.dp.toPx(), l)
+                                    else androidx.compose.ui.util.lerp(8f.dp.toPx(), 2f.dp.toPx(), -l)) + 20f.dp.toPx()
+                                )
+                                lens(10f.dp.toPx() * progress, 14f.dp.toPx() * progress, chromaticAberration = true)
+                            },
+                            highlight = { Highlight.Default.copy(alpha = 0.6f) },
+                            shadow = { Shadow(radius = 4f.dp, alpha = 0.4f) },
+                            innerShadow = {
+                                val progress = dampedDrag.pressProgress
+                                InnerShadow(radius = 8f.dp * progress, alpha = progress)
+                            },
+                            onDrawSurface = {
+                                val lumNorm = ((luminance - 0.3f) / 0.5f).coerceIn(0f, 1f)
+                                val darken = if (pureBlack) androidx.compose.ui.util.lerp(0.22f, 0.55f, lumNorm)
+                                else androidx.compose.ui.util.lerp(0.06f, 0.14f, lumNorm)
+                                drawRect(Color.Black.copy(alpha = darken))
+                            },
+                        )
+                    } else {
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(floatingToolbarSelectedItemContainerColor(pureBlack))
+                    }
+                )
         )
 
         // Icons and Labels Row
