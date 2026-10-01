@@ -439,7 +439,7 @@ dependencies {
     implementation("io.github.kyant0:backdrop:2.0.1")
     implementation(libs.haze)
     implementation(libs.haze.blur)
-    implementation(libs.haze.materials)
+    implementation(libs.haze.blur.materials)
     
     // ==========================================
     // C++ Audio Engine Dependencies
