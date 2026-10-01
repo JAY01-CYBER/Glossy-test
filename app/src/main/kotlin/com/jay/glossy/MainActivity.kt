@@ -147,6 +147,7 @@ import coil3.toBitmap
 import com.metrolist.innertube.YouTube
 import com.metrolist.innertube.models.SongItem
 import com.metrolist.innertube.models.WatchEndpoint
+import com.jay.glossy.constants.EnableGlassFloatingNavBarKey
 import com.jay.glossy.constants.AppBarHeight
 import com.jay.glossy.constants.AppLanguageKey
 import com.jay.glossy.constants.BackgroundBlurEnabledKey
@@ -669,13 +670,23 @@ class MainActivity : ComponentActivity() {
             }
 
             CompositionLocalProvider(LocalDensity provides scaledDensity) {
-            val floatingNavBackdrop = rememberBackdrop()
+            val (glassFloatingNavEnabled) = rememberPreference(
+                EnableGlassFloatingNavBarKey,
+                defaultValue = false,
+            )
+            val navigationBackdrop = rememberBackdrop(
+                if (pureBlack) Color.Black else MaterialTheme.colorScheme.background,
+            )
 
             BoxWithConstraints(
                 modifier =
                     Modifier
                         .fillMaxSize()
-                        .background(if (pureBlack) Color.Black else MaterialTheme.colorScheme.surface),
+                        .background(if (pureBlack) Color.Black else MaterialTheme.colorScheme.surface)
+                        .then(
+                            if (glassFloatingNavEnabled && useFloatingNavBar) Modifier.layerBackdrop(navigationBackdrop)
+                            else Modifier,
+                        ),
             ) {
                 val (backgroundBlurOn) = rememberPreference(BackgroundBlurEnabledKey, defaultValue = true)
 
@@ -1314,7 +1325,7 @@ class MainActivity : ComponentActivity() {
                                         pureBlack = pureBlack,
                                         slimNav = slimNav,
                                         onSearchLongClick = onSearchLongClick,
-                                        floatingNavBackdrop = floatingNavBackdrop,
+                                        backdrop = if (glassFloatingNavEnabled && useFloatingNavBar) navigationBackdrop else null,
                                         modifier =
                                             Modifier
                                                 .align(Alignment.BottomCenter)
@@ -1375,12 +1386,7 @@ class MainActivity : ComponentActivity() {
                                 .fillMaxSize()
                                 .nestedScroll(topAppBarScrollBehavior.nestedScrollConnection),
                     ) {
-                        Row(
-                            Modifier
-                                .fillMaxSize()
-                                .graphicsLayer()
-                                .layerBackdrop(floatingNavBackdrop),
-                        ) {
+                        Row(Modifier.fillMaxSize()) {
                             val onRailItemClick: (Screens, Boolean) -> Unit =
                                 remember(navController, coroutineScope, topAppBarScrollBehavior, playerBottomSheetState) {
                                     { screen: Screens, isSelected: Boolean ->
