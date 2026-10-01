@@ -329,7 +329,7 @@ private fun FloatingAppNavigationBar(
                     if (glassEnabled && hazeState != null) {
                         Modifier.hazeBlur(
                             input = HazeInput.Sources(hazeState),
-                            style = HazeMaterials.ultraThin().then { blurEnabled(true) },
+                            style = HazeMaterials.ultraThin(),
                         )
                     } else Modifier
                 )
@@ -474,7 +474,7 @@ private fun MaterialLiquidTabBar(
                 if (hazeState != null) {
                     Modifier.hazeBlur(
                         input = HazeInput.Sources(hazeState),
-                        style = HazeMaterials.ultraThin().then { blurEnabled(true) },
+                        style = HazeMaterials.ultraThin(),
                     )
                 } else Modifier
             )
