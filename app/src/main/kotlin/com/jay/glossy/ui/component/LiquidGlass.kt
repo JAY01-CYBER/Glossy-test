@@ -30,6 +30,7 @@ import androidx.compose.ui.util.fastCoerceAtMost
 import com.kyant.backdrop.*
 import com.kyant.backdrop.effects.*
 import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop as kyantLayerBackdrop
 
 import kotlin.math.abs
@@ -40,11 +41,16 @@ import kotlin.math.sign
 import kotlin.math.tanh
 
 @Composable
-@Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
 fun rememberBackdrop(color: Color = Color.Unspecified): Backdrop {
-    val graphicsLayer = rememberGraphicsLayer()
-    return remember(graphicsLayer) { 
-        LayerBackdrop(graphicsLayer = graphicsLayer, onDraw = {}) 
+    // This is the same source-layer contract used by SimpMusic/Kyant0: the
+    // backdrop records a base fill first and then the actual page content.
+    // The glass surface MUST be a sibling of the layerBackdrop source; putting
+    // the glass inside the source creates a RuntimeShader feedback loop.
+    return rememberLayerBackdrop {
+        if (color != Color.Unspecified) {
+            drawRect(color)
+        }
+        drawContent()
     }
 }
 

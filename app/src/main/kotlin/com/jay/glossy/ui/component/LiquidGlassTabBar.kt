@@ -234,15 +234,12 @@ fun LiquidGlassTabBar(
                             saturation = 1.5f,
                         )
 
-                        // The active blob is more frosted than the outer capsule.
                         blur(
-                            (
-                                if (l > 0f) {
-                                    lerp(8f.dp.toPx(), 16f.dp.toPx(), l)
-                                } else {
-                                    lerp(8f.dp.toPx(), 2f.dp.toPx(), -l)
-                                }
-                            ) + 20f.dp.toPx(),
+                            if (l > 0f) {
+                                lerp(8f.dp.toPx(), 16f.dp.toPx(), l)
+                            } else {
+                                lerp(8f.dp.toPx(), 2f.dp.toPx(), -l)
+                            },
                         )
 
                         lens(
