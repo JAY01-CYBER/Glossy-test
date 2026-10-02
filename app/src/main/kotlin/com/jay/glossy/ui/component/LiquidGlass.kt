@@ -42,14 +42,11 @@ import kotlin.math.tanh
 
 @Composable
 fun rememberBackdrop(color: Color = Color.Unspecified): Backdrop {
-    // IMPORTANT: the backdrop source must record the actual parent content.
-    // An empty LayerBackdrop produces a transparent/flat pill because there is
-    // nothing for Kyant's blur/lens shader to sample. SimpMusic uses
-    // rememberLayerBackdrop { drawRect(...); drawContent() } for exactly this reason.
-    return rememberLayerBackdrop {
-        drawRect(color)
-        drawContent()
-    }
+    // Kyant0's LayerBackdrop already records the parent content through its
+    // layerBackdrop modifier. Keep the default drawContent() recorder here;
+    // adding another drawRect/color layer can produce an invalid draw source
+    // and can crash on some Compose renderer paths.
+    return rememberLayerBackdrop()
 }
 
 @Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
