@@ -66,6 +66,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.scale
 import com.kyant.backdrop.drawBackdrop
@@ -504,7 +505,7 @@ private fun MaterialLiquidTabBar(
             modifier = Modifier
                 .height(barHeight)
                 .width(
-                    if (availableWidth.isSpecified && availableWidth > 0.dp) {
+                    if (availableWidth != Dp.Unspecified && availableWidth > 0.dp) {
                         availableWidth.coerceAtMost(480.dp)
                     } else {
                         (80.dp * tabs.size)

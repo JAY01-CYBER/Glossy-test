@@ -48,6 +48,7 @@ import androidx.core.graphics.scale
 import androidx.navigation.NavController
 import com.jay.glossy.LocalPlayerConnection
 import com.jay.glossy.ui.player.MiniPlayer
+import com.jay.glossy.ui.screens.Screens
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -148,11 +149,12 @@ fun LiquidGlassAppBottomNavigationBar(
             if (isExpanded) {
                 BoxWithConstraints(Modifier.weight(1f, fill = false)) {
                     LiquidGlassTabBar(
-                        tabs = barTabs,
+                        tabs = listOf(Screens.Home, Screens.Library),
                         selectedTab = barTabs.indexOfFirst { it.ordinal == selectedIndex }.coerceAtLeast(0),
                         backdrop = backdrop,
                         layer = layer,
                         luminance = luminanceAnimation.value,
+                        pureBlack = false,
                         availableWidth = maxWidth,
                         onTabSelected = { position ->
                             selectedIndex = barTabs[position].ordinal
