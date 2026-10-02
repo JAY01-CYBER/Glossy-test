@@ -13,6 +13,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -312,156 +313,97 @@ private fun FloatingAppNavigationBar(
     val barHeight = if (slimNav) 48.dp else 56.dp
     val fabSize = if (slimNav) 48.dp else 56.dp
 
-    Row(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
             .padding(top = 12.dp, bottom = 8.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
+        contentAlignment = Alignment.Center,
     ) {
-        MaterialLiquidTabBar(
-            tabs = mainItems,
-            selectedIndex = lastMainIndex,
-            isMainTabActive = selectedMainIndex >= 0,
-            currentRoute = currentRoute,
-            navigationItems = navigationItems,
-            pureBlack = pureBlack,
-            slimNav = slimNav,
-            barHeight = barHeight,
-            onItemClick = onItemClick,
-            backdrop = if (glassEnabled) backdrop else null,
-            glassEnabled = glassEnabled,
-            glassLayer = glassLayer,
-            luminance = luminanceAnimation.value,
-        )
+        val searchItem = navigationItems.find { it == Screens.Search }
+        val fabSize = if (slimNav) 48.dp else 56.dp
+        val searchSpace = if (searchItem != null) 16.dp + fabSize else 0.dp
+        val glassBarWidth = (maxWidth - searchSpace).coerceAtLeast(0.dp)
 
-        if (searchItem != null) {
-            Spacer(modifier = Modifier.width(16.dp))
-
-            val isSearchSelected = remember(currentRoute, searchItem.route) {
-                isRouteSelected(currentRoute, searchItem.route, navigationItems)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (mainItems.isNotEmpty()) {
+                MaterialLiquidTabBar(
+                    tabs = mainItems,
+                    selectedIndex = lastMainIndex,
+                    isMainTabActive = selectedMainIndex >= 0,
+                    currentRoute = currentRoute,
+                    navigationItems = navigationItems,
+                    pureBlack = pureBlack,
+                    slimNav = slimNav,
+                    barHeight = if (slimNav) 56.dp else 64.dp,
+                    onItemClick = onItemClick,
+                    backdrop = if (glassEnabled) backdrop else null,
+                    glassEnabled = glassEnabled,
+                    glassLayer = glassLayer,
+                    luminance = luminanceAnimation.value,
+                    availableWidth = glassBarWidth,
+                )
             }
-            val currentIsSearchSelected by rememberUpdatedState(isSearchSelected)
-            val interactionSource = remember { MutableInteractionSource() }
 
-            if (onSearchLongClick != null) {
-                LaunchedEffect(interactionSource) {
-                    var isLongClick = false
-                    interactionSource.interactions.collectLatest { interaction ->
-                        when (interaction) {
-                            is PressInteraction.Press -> {
-                                isLongClick = false
-                                delay(viewConfiguration.longPressTimeoutMillis)
-                                isLongClick = true
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onSearchLongClick.invoke()
+            if (searchItem != null) {
+                Spacer(modifier = Modifier.width(16.dp))
+
+                val isSearchSelected = remember(currentRoute, searchItem.route) {
+                    isRouteSelected(currentRoute, searchItem.route, navigationItems)
+                }
+                val currentIsSearchSelected by rememberUpdatedState(isSearchSelected)
+                val interactionSource = remember { MutableInteractionSource() }
+
+                if (onSearchLongClick != null) {
+                    LaunchedEffect(interactionSource) {
+                        var isLongClick = false
+                        interactionSource.interactions.collectLatest { interaction ->
+                            when (interaction) {
+                                is PressInteraction.Press -> {
+                                    isLongClick = false
+                                    delay(viewConfiguration.longPressTimeoutMillis)
+                                    isLongClick = true
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onSearchLongClick.invoke()
+                                }
+                                is PressInteraction.Release -> {
+                                    if (!isLongClick) {
+                                        onItemClick(searchItem, currentIsSearchSelected)
+                                    }
+                                }
+                                is PressInteraction.Cancel -> isLongClick = false
                             }
-                            is PressInteraction.Release -> {
-                                if (!isLongClick) {
+                        }
+                    }
+                }
+
+                if (glassEnabled && backdrop != null) {
+                    val searchInteraction = rememberGlassInteraction()
+
+                    Box(
+                        modifier = Modifier
+                            .size(fabSize)
+                            .drawInteractiveGlass(
+                                isDark = pureBlack || androidx.compose.foundation.isSystemInDarkTheme(),
+                                backdrop = backdrop,
+                                layer = glassLayer,
+                                luminanceAnimation = luminanceAnimation.value,
+                                shape = CircleShape,
+                                interaction = searchInteraction,
+                            )
+                            .clickable(
+                                interactionSource = interactionSource,
+                                indication = null,
+                            ) {
+                                if (onSearchLongClick == null) {
                                     onItemClick(searchItem, currentIsSearchSelected)
                                 }
                             }
-                            is PressInteraction.Cancel -> isLongClick = false
-                        }
-                    }
-                }
-            }
-
-            var searchPressed by remember { mutableStateOf(false) }
-            LaunchedEffect(interactionSource) {
-                interactionSource.interactions.collectLatest { interaction ->
-                    when (interaction) {
-                        is PressInteraction.Press -> searchPressed = true
-                        is PressInteraction.Release,
-                        is PressInteraction.Cancel -> searchPressed = false
-                    }
-                }
-            }
-
-            val searchGlassScale by animateFloatAsState(
-                targetValue = if (searchPressed) 1.07f else 1f,
-                animationSpec = androidx.compose.animation.core.spring(
-                    dampingRatio = 0.62f,
-                    stiffness = 520f,
-                ),
-                label = "SearchLiquidGlassScale",
-            )
-
-            val searchShape = CircleShape
-
-            if (glassEnabled && backdrop != null) {
-                Box(
-                    modifier = Modifier
-                        .size(fabSize)
-                        .clickable(
-                            interactionSource = interactionSource,
-                            indication = null,
-                        ) {
-                            if (onSearchLongClick == null) {
-                                onItemClick(searchItem, currentIsSearchSelected)
-                            }
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .matchParentSize()
-                            .graphicsLayer {
-                                scaleX = searchGlassScale
-                                scaleY = searchGlassScale
-                            }
-                            .clip(searchShape)
-                            .background(
-                                if (pureBlack) {
-                                    Color.White.copy(alpha = 0.055f)
-                                } else {
-                                    Color.White.copy(alpha = 0.12f)
-                                }
-                            )
-                    )
-
-                    Icon(
-                        painter = painterResource(
-                            id = if (isSearchSelected) {
-                                searchItem.iconIdActive
-                            } else {
-                                searchItem.iconIdInactive
-                            }
-                        ),
-                        contentDescription = stringResource(searchItem.titleId),
-                        modifier = Modifier.size(24.dp),
-                        tint = if (isSearchSelected) {
-                            floatingToolbarSelectedItemContentColor(pureBlack)
-                        } else {
-                            floatingToolbarFabContentColor(pureBlack)
-                        },
-                    )
-                }
-            } else {
-                Surface(
-                    onClick = {
-                        if (onSearchLongClick == null) {
-                            onItemClick(searchItem, currentIsSearchSelected)
-                        }
-                    },
-                    interactionSource = interactionSource,
-                    shape = CircleShape,
-                    color = if (isSearchSelected) {
-                        floatingToolbarSelectedItemContainerColor(pureBlack)
-                    } else {
-                        floatingToolbarFabContainerColor(pureBlack)
-                    },
-                    contentColor = if (isSearchSelected) {
-                        floatingToolbarSelectedItemContentColor(pureBlack)
-                    } else {
-                        floatingToolbarFabContentColor(pureBlack)
-                    },
-                    shadowElevation = 12.dp,
-                    modifier = Modifier.size(fabSize),
-                ) {
-                    Box(
+                            .then(searchInteraction.gestureModifier),
                         contentAlignment = Alignment.Center,
-                        modifier = Modifier.fillMaxSize()
                     ) {
                         Icon(
                             painter = painterResource(
@@ -469,7 +411,46 @@ private fun FloatingAppNavigationBar(
                                     searchItem.iconIdActive
                                 } else {
                                     searchItem.iconIdInactive
-                                }
+                                },
+                            ),
+                            contentDescription = stringResource(searchItem.titleId),
+                            modifier = Modifier.size(24.dp),
+                            tint = if (isSearchSelected) {
+                                floatingToolbarSelectedItemContentColor(pureBlack)
+                            } else {
+                                floatingToolbarFabContentColor(pureBlack)
+                            },
+                        )
+                    }
+                } else {
+                    Surface(
+                        onClick = {
+                            if (onSearchLongClick == null) {
+                                onItemClick(searchItem, currentIsSearchSelected)
+                            }
+                        },
+                        interactionSource = interactionSource,
+                        shape = CircleShape,
+                        color = if (isSearchSelected) {
+                            floatingToolbarSelectedItemContainerColor(pureBlack)
+                        } else {
+                            floatingToolbarFabContainerColor(pureBlack)
+                        },
+                        contentColor = if (isSearchSelected) {
+                            floatingToolbarSelectedItemContentColor(pureBlack)
+                        } else {
+                            floatingToolbarFabContentColor(pureBlack)
+                        },
+                        shadowElevation = 12.dp,
+                        modifier = Modifier.size(fabSize),
+                    ) {
+                        Icon(
+                            painter = painterResource(
+                                id = if (isSearchSelected) {
+                                    searchItem.iconIdActive
+                                } else {
+                                    searchItem.iconIdInactive
+                                },
                             ),
                             contentDescription = stringResource(searchItem.titleId),
                             modifier = Modifier.size(24.dp),
@@ -477,7 +458,6 @@ private fun FloatingAppNavigationBar(
                     }
                 }
             }
-
         }
     }
 }
@@ -497,250 +477,90 @@ private fun MaterialLiquidTabBar(
     glassEnabled: Boolean = false,
     glassLayer: androidx.compose.ui.graphics.layer.GraphicsLayer? = null,
     luminance: Float = 0.5f,
+    availableWidth: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp.Unspecified,
 ) {
-    val tabsCount = tabs.size
-    if (tabsCount == 0) return
+    if (tabs.isEmpty()) return
 
-    val density = LocalDensity.current
-    val tabWidth = if (slimNav) 68.dp else 80.dp
-    val blobHeight = if (slimNav) 38.dp else 44.dp
-    val tabWidthPx = with(density) { tabWidth.toPx() }
-    val totalWidth = tabWidth * tabsCount
-    val animationScope = rememberCoroutineScope()
-    val draggedFlag = remember { booleanArrayOf(false) }
-    val totalDragDistance = remember { floatArrayOf(0f) }
-
-    val currentOnItemClick by rememberUpdatedState(onItemClick)
-    val currentRouteState by rememberUpdatedState(currentRoute)
-    val currentTabs by rememberUpdatedState(tabs)
-    val currentNavItems by rememberUpdatedState(navigationItems)
-
-    val dampedDrag = remember(animationScope, tabsCount) {
-        DampedDragAnimation(
-            animationScope = animationScope,
-            initialValue = selectedIndex.coerceIn(0, tabsCount - 1).toFloat(),
-            valueRange = 0f..(tabsCount - 1).toFloat(),
-            visibilityThreshold = 0.001f,
-            initialScale = 1f,
-            pressedScale = 1.10f,
-            onDragStarted = {
-                draggedFlag[0] = false
-                totalDragDistance[0] = 0f
-            },
-            onDragStopped = {
-                if (draggedFlag[0]) {
-                    val target = targetValue.roundToInt().coerceIn(0, tabsCount - 1)
-                    animateToValue(target.toFloat())
-                    val screen = currentTabs[target]
-                    val isSelected = isRouteSelected(currentRouteState, screen.route, currentNavItems)
-                    currentOnItemClick(screen, isSelected)
-                }
-            },
-            onDrag = { _, dragAmount ->
-                totalDragDistance[0] += kotlin.math.abs(dragAmount.x)
-                if (totalDragDistance[0] > 8f) draggedFlag[0] = true
-                updateValue(
-                    (targetValue + dragAmount.x / tabWidthPx)
-                        .coerceIn(0f, (tabsCount - 1).toFloat()),
-                )
+    if (glassEnabled && backdrop != null) {
+        LiquidGlassTabBar(
+            tabs = tabs,
+            selectedTab = selectedIndex.coerceIn(0, tabs.lastIndex),
+            backdrop = backdrop,
+            layer = glassLayer,
+            luminance = luminance,
+            pureBlack = pureBlack,
+            modifier = Modifier,
+            availableWidth = availableWidth,
+            onTabSelected = { index ->
+                val screen = tabs[index]
+                val selected = isRouteSelected(currentRoute, screen.route, navigationItems)
+                onItemClick(screen, selected)
             },
         )
-    }
-
-    LaunchedEffect(selectedIndex) {
-        if (selectedIndex >= 0) {
-            dampedDrag.animateToValue(selectedIndex.coerceIn(0, tabsCount - 1).toFloat())
-        }
-    }
-
-    val capsuleShape = RoundedCornerShape(50)
-    val selectedShape = RoundedCornerShape(50)
-    val isDarkGlass = pureBlack
-    val l = (luminance * 2f - 1f).let { sign(it) * it * it }
-
-    Box(
-        modifier = Modifier
-            .height(barHeight)
-            .width(totalWidth)
-            .then(dampedDrag.modifier),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        if (glassEnabled && backdrop != null) {
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .drawBackdrop(
-                        backdrop = backdrop,
-                        shape = { capsuleShape },
-                        effects = {
-                            vibrancy()
-                            colorControls(
-                                brightness = 0.02f,
-                                contrast = 1.02f,
-                                saturation = 1.32f,
-                            )
-                            val blurRadius = if (l >= 0f) {
-                                androidx.compose.ui.util.lerp(10.dp.toPx(), 20.dp.toPx(), l)
-                            } else {
-                                androidx.compose.ui.util.lerp(10.dp.toPx(), 7.dp.toPx(), -l)
-                            }
-                            blur(blurRadius)
-                            lens(
-                                size.minDimension * 0.22f,
-                                size.minDimension * 0.46f,
-                                chromaticAberration = true,
-                            )
-                        },
-                        highlight = { Highlight.Default.copy(alpha = 0.52f) },
-                        shadow = { Shadow(radius = 12.dp, alpha = 0.24f) },
-                        innerShadow = { InnerShadow(radius = 7.dp, alpha = 0.22f) },
-                        onDrawBackdrop = { drawBackdrop ->
-                            drawBackdrop()
-                            glassLayer?.record { drawBackdrop() }
-                        },
-                        onDrawSurface = {
-                            val normalized = ((luminance - 0.3f) / 0.5f).coerceIn(0f, 1f)
-                            val scrim = if (isDarkGlass) {
-                                androidx.compose.ui.util.lerp(0.14f, 0.34f, normalized)
-                            } else {
-                                androidx.compose.ui.util.lerp(0.10f, 0.22f, normalized)
-                            }
-                            drawRect(
-                                (if (isDarkGlass) Color.Black else Color.White).copy(alpha = scrim),
-                            )
-                            drawRoundRect(
-                                color = Color.White.copy(alpha = if (isDarkGlass) 0.07f else 0.18f),
-                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 0.8.dp.toPx()),
-                                cornerRadius = androidx.compose.ui.geometry.CornerRadius(
-                                    x = size.minDimension * 0.5f,
-                                    y = size.minDimension * 0.5f,
-                                ),
-                            )
-                        },
-                    ),
-            )
-        } else {
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .shadow(12.dp, capsuleShape)
-                    .clip(capsuleShape)
-                    .background(floatingToolbarContainerColor(pureBlack)),
-            )
-        }
-
-        val indicatorOpacity by animateFloatAsState(
-            targetValue = if (isMainTabActive) 1f else 0f,
-            label = "GlassIndicatorOpacity",
-        )
-
+    } else {
+        // Keep the existing floating navigation appearance when the Glass Floating
+        // Navigation Bar preference is disabled.
         Box(
-            Modifier
-                .graphicsLayer {
-                    translationX = dampedDrag.value * tabWidthPx
-                    alpha = indicatorOpacity
-                    val velocity = (dampedDrag.velocity / 10f).coerceIn(-0.20f, 0.20f)
-                    scaleX = dampedDrag.scaleX / (1f - velocity * 0.30f)
-                    scaleY = dampedDrag.scaleY * (1f - velocity * 0.08f)
-                }
-                .width(tabWidth)
-                .height(blobHeight)
-                .padding(horizontal = 5.dp)
-                .then(
-                    if (glassEnabled && backdrop != null) {
-                        Modifier.drawBackdrop(
-                            backdrop = backdrop,
-                            shape = { selectedShape },
-                            effects = {
-                                vibrancy()
-                                colorControls(
-                                    brightness = 0.035f,
-                                    contrast = 1.03f,
-                                    saturation = 1.38f,
-                                )
-                                blur(14.dp.toPx() + if (l > 0f) 7.dp.toPx() * l else 0f)
-                                lens(8.dp.toPx(), 13.dp.toPx(), chromaticAberration = true)
-                            },
-                            highlight = { Highlight.Default.copy(alpha = 0.68f) },
-                            shadow = { Shadow(radius = 6.dp, alpha = 0.30f) },
-                            innerShadow = { InnerShadow(radius = 6.dp, alpha = 0.30f) },
-                            onDrawSurface = {
-                                val normalized = ((luminance - 0.3f) / 0.5f).coerceIn(0f, 1f)
-                                val scrim = if (isDarkGlass) {
-                                    androidx.compose.ui.util.lerp(0.20f, 0.42f, normalized)
-                                } else {
-                                    androidx.compose.ui.util.lerp(0.13f, 0.25f, normalized)
-                                }
-                                drawRect(
-                                    (if (isDarkGlass) Color.Black else Color.White).copy(alpha = scrim),
-                                )
-                                drawRoundRect(
-                                    color = Color.White.copy(alpha = if (isDarkGlass) 0.10f else 0.24f),
-                                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 0.7.dp.toPx()),
-                                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(
-                                        x = size.minDimension * 0.5f,
-                                        y = size.minDimension * 0.5f,
-                                    ),
-                                )
-                            },
-                        )
+            modifier = Modifier
+                .height(barHeight)
+                .width(
+                    if (availableWidth.isSpecified && availableWidth > 0.dp) {
+                        availableWidth.coerceAtMost(480.dp)
                     } else {
-                        Modifier
-                            .clip(selectedShape)
-                            .background(floatingToolbarSelectedItemContainerColor(pureBlack))
+                        (80.dp * tabs.size)
                     },
-                ),
-        )
-
-        Row(
-            Modifier
-                .fillMaxSize()
-                .then(dampedDrag.modifier),
-            verticalAlignment = Alignment.CenterVertically,
+                )
+                .clip(RoundedCornerShape(50))
+                .background(floatingToolbarContainerColor(pureBlack)),
+            contentAlignment = Alignment.Center,
         ) {
-            tabs.forEachIndexed { position, screen ->
-                val isSelected = isRouteSelected(currentRouteState, screen.route, currentNavItems)
-                val color = if (isSelected) {
-                    floatingToolbarSelectedItemContentColor(pureBlack)
-                } else {
-                    floatingToolbarItemContentColor(pureBlack)
-                }
-                val animatedColor by animateColorAsState(color, label = "GlassTabColor")
-
-                Column(
-                    Modifier
-                        .width(tabWidth)
-                        .fillMaxHeight()
-                        .clip(selectedShape)
-                        .clickable(
-                            interactionSource = null,
-                            indication = null,
-                            role = Role.Tab,
-                        ) {
-                            if (!draggedFlag[0]) {
-                                currentOnItemClick(screen, isSelected)
-                            }
-                        },
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Icon(
-                        painter = painterResource(
-                            id = if (isSelected) screen.iconIdActive else screen.iconIdInactive,
-                        ),
-                        contentDescription = stringResource(screen.titleId),
-                        tint = animatedColor,
-                        modifier = Modifier.size(24.dp),
-                    )
-                    if (!slimNav) {
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = stringResource(screen.titleId),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = animatedColor,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                tabs.forEach { screen ->
+                    val selected = isRouteSelected(currentRoute, screen.route, navigationItems)
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(50))
+                            .clickable(
+                                interactionSource = null,
+                                indication = null,
+                                role = Role.Tab,
+                            ) {
+                                onItemClick(screen, selected)
+                            },
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Icon(
+                            painter = painterResource(
+                                if (selected) screen.iconIdActive else screen.iconIdInactive,
+                            ),
+                            contentDescription = stringResource(screen.titleId),
+                            tint = if (selected) {
+                                floatingToolbarSelectedItemContentColor(pureBlack)
+                            } else {
+                                floatingToolbarItemContentColor(pureBlack)
+                            },
+                            modifier = Modifier.size(24.dp),
                         )
+                        if (!slimNav) {
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = stringResource(screen.titleId),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (selected) {
+                                    floatingToolbarSelectedItemContentColor(pureBlack)
+                                } else {
+                                    floatingToolbarItemContentColor(pureBlack)
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
             }

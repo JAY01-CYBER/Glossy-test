@@ -1,6 +1,8 @@
 /**
  * Glossy Project (C) 2026
- * Original UI/Physics by Simp Music (maxrave-dev)
+ *
+ * Liquid-glass bottom navigation adapted from the Kyant/SimpMusic liquid tab
+ * architecture, using Glossy's existing Backdrop 2.0.1 integration.
  */
 package com.jay.glossy.ui.component
 
@@ -43,21 +45,27 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.util.fastCoerceIn
 import androidx.compose.ui.util.lerp
-
-// WILDCARD IMPORTS
-import com.kyant.backdrop.*
-import com.kyant.backdrop.effects.*
-import com.kyant.backdrop.highlight.*
-import com.kyant.backdrop.shadow.*
-
+import androidx.compose.foundation.isSystemInDarkTheme
+import com.jay.glossy.ui.screens.Screens
+import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.colorControls
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
+import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.shadow.InnerShadow
+import com.kyant.backdrop.shadow.Shadow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
@@ -69,135 +77,211 @@ import kotlin.math.roundToInt
 import kotlin.math.sign
 
 private val CapsuleShape = RoundedCornerShape(percent = 50)
-private val TabWidth = 96.dp
+private val MaxTabWidth = 96.dp
 private val BarHeight = 64.dp
 private val BlobHeight = 56.dp
 private val BarInset = 6.dp
 
+/**
+ * Kyant/SimpMusic-style liquid-glass navigation:
+ *
+ * 1. A luminance-adaptive frosted capsule.
+ * 2. A separate sliding/refracting glass blob for the selected tab.
+ * 3. Crisp icons and labels above both glass layers.
+ *
+ * The backdrop is the same Backdrop 2.0.1 instance already supplied by Glossy's
+ * root content, so no new dependency or alternate blur implementation is needed.
+ */
 @Composable
 fun LiquidGlassTabBar(
-    tabs: List<BottomNavScreen>,
+    tabs: List<Screens>,
     selectedTab: Int,
-    backdrop: Backdrop, // Fixed: Using standard Backdrop class
+    backdrop: Backdrop,
     layer: GraphicsLayer?,
     luminance: Float,
+    pureBlack: Boolean,
     modifier: Modifier = Modifier,
     availableWidth: Dp = Dp.Unspecified,
     onTabSelected: (Int) -> Unit,
 ) {
+    if (tabs.isEmpty()) return
+
     val density = LocalDensity.current
     val tabsCount = tabs.size
+
     val tabWidth =
         if (availableWidth.isSpecified && availableWidth > 0.dp) {
-            ((availableWidth - BarInset * 2) / tabsCount).coerceAtMost(TabWidth)
+            ((availableWidth - BarInset * 2) / tabsCount).coerceAtMost(MaxTabWidth)
         } else {
-            TabWidth
+            MaxTabWidth
         }
+
     val tabWidthPx = with(density) { tabWidth.toPx() }
     val currentTabWidthPx by rememberUpdatedState(tabWidthPx)
     val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
     val animationScope = rememberCoroutineScope()
-    
     val barInteraction = rememberGlassInteraction()
-    val isDark = true
+    val isDark = pureBlack || isSystemInDarkTheme()
 
-    var currentIndex by remember { mutableIntStateOf(selectedTab.coerceAtLeast(0)) }
+    var currentIndex by remember {
+        mutableIntStateOf(selectedTab.coerceIn(0, tabsCount - 1))
+    }
     val draggedFlag = remember { booleanArrayOf(false) }
 
-    val dampedDrag =
-        remember(animationScope, tabsCount) {
-            DampedDragAnimation(
-                animationScope = animationScope,
-                initialValue = selectedTab.coerceAtLeast(0).toFloat(),
-                valueRange = 0f..(tabsCount - 1).toFloat(),
-                visibilityThreshold = 0.001f,
-                initialScale = 1f,
-                pressedScale = 76f / 56f,
-                onDragStarted = { draggedFlag[0] = false },
-                onDragStopped = {
-                    if (draggedFlag[0]) {
-                        val target = targetValue.roundToInt().coerceIn(0, tabsCount - 1)
-                        currentIndex = target
-                        animateToValue(target.toFloat())
-                    }
-                },
-                onDrag = { _, dragAmount ->
-                    if (dragAmount.x != 0f) draggedFlag[0] = true
-                    updateValue(
-                        (targetValue + dragAmount.x / currentTabWidthPx * if (isLtr) 1f else -1f)
-                            .coerceIn(0f, (tabsCount - 1).toFloat()),
-                    )
-                },
-            )
-        }
+    val dampedDrag = remember(animationScope, tabsCount) {
+        DampedDragAnimation(
+            animationScope = animationScope,
+            initialValue = selectedTab.coerceIn(0, tabsCount - 1).toFloat(),
+            valueRange = 0f..(tabsCount - 1).toFloat(),
+            visibilityThreshold = 0.001f,
+            initialScale = 1f,
+            // Same "lifted blob" proportion as SimpMusic/Kyant's tab bar.
+            pressedScale = 76f / 56f,
+            onDragStarted = {
+                draggedFlag[0] = false
+            },
+            onDragStopped = {
+                if (draggedFlag[0]) {
+                    val target = targetValue.roundToInt().coerceIn(0, tabsCount - 1)
+                    currentIndex = target
+                    animateToValue(target.toFloat())
+                }
+            },
+            onDrag = { _, dragAmount ->
+                if (dragAmount.x != 0f) draggedFlag[0] = true
+                updateValue(
+                    (
+                        targetValue +
+                            dragAmount.x / currentTabWidthPx * if (isLtr) 1f else -1f
+                        ).coerceIn(0f, (tabsCount - 1).toFloat()),
+                )
+            },
+        )
+    }
 
     LaunchedEffect(selectedTab) {
-        if (selectedTab >= 0 && currentIndex != selectedTab) currentIndex = selectedTab
+        if (selectedTab >= 0 && currentIndex != selectedTab) {
+            currentIndex = selectedTab.coerceIn(0, tabsCount - 1)
+            dampedDrag.animateToValue(currentIndex.toFloat())
+        }
     }
+
     LaunchedEffect(dampedDrag) {
         snapshotFlow { currentIndex }
             .drop(1)
             .collectLatest { index ->
                 dampedDrag.animateToValue(index.toFloat())
-                if (draggedFlag[0]) onTabSelected(index)
+                if (draggedFlag[0]) {
+                    onTabSelected(index)
+                    draggedFlag[0] = false
+                }
             }
     }
 
     Box(
-        modifier =
-            modifier
-                .height(BarHeight)
-                .width(tabWidth * tabsCount + BarInset * 2)
-                .pointerInput(barInteraction) { 
-                    // FIXED: This now correctly references the PointerInputScope extension
-                    detectPress { }
-                },
+        modifier = modifier
+            .height(BarHeight)
+            .width(tabWidth * tabsCount + BarInset * 2)
+            .pointerInput(barInteraction) {
+                detectPress {}
+            },
         contentAlignment = Alignment.CenterStart,
     ) {
-        Box(Modifier.matchParentSize().drawInteractiveGlass(isDark, backdrop, layer, luminance, CapsuleShape, barInteraction))
+        // 1) The actual frosted/refraction glass capsule.
+        Box(
+            Modifier
+                .matchParentSize()
+                .drawInteractiveGlass(
+                    isDark = isDark,
+                    backdrop = backdrop,
+                    layer = layer,
+                    luminanceAnimation = luminance,
+                    shape = CapsuleShape,
+                    interaction = barInteraction,
+                ),
+        )
 
+        // 2) The selected liquid-glass blob.
         Box(
             Modifier
                 .graphicsLayer {
                     translationX =
-                        (if (isLtr) dampedDrag.value else (tabsCount - 1) - dampedDrag.value) * tabWidthPx +
-                        BarInset.toPx()
-                }.drawBackdrop(
+                        (if (isLtr) dampedDrag.value else (tabsCount - 1) - dampedDrag.value) *
+                            tabWidthPx + BarInset.toPx()
+
+                    scaleX = dampedDrag.scaleX
+                    scaleY = dampedDrag.scaleY
+
+                    val velocity = (dampedDrag.velocity / 10f)
+                        .fastCoerceIn(-0.2f, 0.2f)
+                    scaleX /= 1f - velocity * 0.75f
+                    scaleY *= 1f - velocity * 0.25f
+                }
+                .drawBackdrop(
                     backdrop = backdrop,
                     shape = { CapsuleShape },
                     effects = {
-                        val l = (luminance * 2f - 1f).let { sign(it) * it * it }
+                        val l = (luminance * 2f - 1f).let {
+                            sign(it) * it * it
+                        }
                         val progress = dampedDrag.pressProgress
+
                         vibrancy()
-                        colorControls(brightness = 0.05f, contrast = 1f, saturation = 1.5f)
-                        blur(
-                            (if (l > 0f) lerp(8f.dp.toPx(), 16f.dp.toPx(), l) else lerp(8f.dp.toPx(), 2f.dp.toPx(), -l)) +
-                                20f.dp.toPx(),
+
+                        colorControls(
+                            brightness = 0.05f,
+                            contrast = 1f,
+                            saturation = 1.5f,
                         )
-                        lens(10f.dp.toPx() * progress, 14f.dp.toPx() * progress, chromaticAberration = true)
+
+                        // The active blob is more frosted than the outer capsule.
+                        blur(
+                            (
+                                if (l > 0f) {
+                                    lerp(8f.dp.toPx(), 16f.dp.toPx(), l)
+                                } else {
+                                    lerp(8f.dp.toPx(), 2f.dp.toPx(), -l)
+                                }
+                            ) + 20f.dp.toPx(),
+                        )
+
+                        lens(
+                            10f.dp.toPx() * progress,
+                            14f.dp.toPx() * progress,
+                            chromaticAberration = true,
+                        )
                     },
-                    highlight = { Highlight.Default.copy(alpha = 0.6f) },
-                    shadow = { Shadow(radius = 4f.dp, alpha = 0.4f) },
+                    highlight = {
+                        Highlight.Default.copy(alpha = 0.6f)
+                    },
+                    shadow = {
+                        Shadow(radius = 4f.dp, alpha = 0.4f)
+                    },
                     innerShadow = {
-                        val progress = dampedDrag.pressProgress
-                        InnerShadow(radius = 8f.dp * progress, alpha = progress)
-                    },
-                    layerBlock = {
-                        scaleX = dampedDrag.scaleX
-                        scaleY = dampedDrag.scaleY
-                        val velocity = dampedDrag.velocity / 10f
-                        scaleX /= 1f - (velocity * 0.75f).fastCoerceIn(-0.2f, 0.2f)
-                        scaleY *= 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
+                        InnerShadow(
+                            radius = 8f.dp * dampedDrag.pressProgress,
+                            alpha = dampedDrag.pressProgress,
+                        )
                     },
                     onDrawSurface = {
-                        val lumNorm = ((luminance - 0.3f) / 0.5f).coerceIn(0f, 1f)
-                        val darken = if (isDark) lerp(0.22f, 0.55f, lumNorm) else lerp(0.06f, 0.14f, lumNorm)
+                        val lumNorm =
+                            ((luminance - 0.3f) / 0.5f).coerceIn(0f, 1f)
+
+                        val darken =
+                            if (isDark) {
+                                lerp(0.22f, 0.55f, lumNorm)
+                            } else {
+                                lerp(0.06f, 0.14f, lumNorm)
+                            }
+
                         drawRect(Color.Black.copy(alpha = darken))
                     },
-                ).width(tabWidth)
+                )
+                .width(tabWidth)
                 .height(BlobHeight),
         )
 
+        // 3) Crisp content above the glass.
         Row(
             Modifier
                 .matchParentSize()
@@ -210,6 +294,7 @@ fun LiquidGlassTabBar(
                     screen = screen,
                     selected = currentIndex == position,
                     width = tabWidth,
+                    pureBlack = pureBlack,
                 ) {
                     if (position == currentIndex) {
                         onTabSelected(position)
@@ -225,12 +310,20 @@ fun LiquidGlassTabBar(
 
 @Composable
 private fun LiquidGlassTab(
-    screen: BottomNavScreen,
+    screen: Screens,
     selected: Boolean,
     width: Dp,
+    pureBlack: Boolean,
     onClick: () -> Unit,
 ) {
-    val color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+    val color =
+        if (selected) {
+            if (pureBlack) Color.White else MaterialTheme.colorScheme.primary
+        } else {
+            if (pureBlack) Color.White.copy(alpha = 0.82f)
+            else MaterialTheme.colorScheme.onSurface
+        }
+
     Column(
         Modifier
             .width(width)
@@ -246,9 +339,17 @@ private fun LiquidGlassTab(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         CompositionLocalProvider(LocalContentColor provides color) {
-            screen.icon()
+            androidx.compose.material3.Icon(
+                painter = painterResource(
+                    if (selected) screen.iconIdActive else screen.iconIdInactive,
+                ),
+                contentDescription = stringResource(screen.titleId),
+                tint = color,
+                modifier = Modifier.height(24.dp).width(24.dp),
+            )
+
             Text(
-                text = screen.title, 
+                text = stringResource(screen.titleId),
                 style = MaterialTheme.typography.bodySmall,
                 color = color,
                 maxLines = 1,
@@ -257,6 +358,9 @@ private fun LiquidGlassTab(
     }
 }
 
+/**
+ * Spring-damped 1-D physics port used by Kyant's liquid tab interaction.
+ */
 class DampedDragAnimation(
     private val animationScope: CoroutineScope,
     val initialValue: Float,
@@ -268,11 +372,16 @@ class DampedDragAnimation(
     val onDragStopped: DampedDragAnimation.() -> Unit,
     val onDrag: DampedDragAnimation.(size: IntSize, dragAmount: Offset) -> Unit,
 ) {
-    private val valueAnimationSpec = spring<Float>(1f, 1000f, visibilityThreshold)
-    private val velocityAnimationSpec = spring<Float>(0.5f, 300f, visibilityThreshold * 10f)
-    private val pressProgressAnimationSpec = spring<Float>(1f, 1000f, 0.001f)
-    private val scaleXAnimationSpec = spring<Float>(0.6f, 250f, 0.001f)
-    private val scaleYAnimationSpec = spring<Float>(0.7f, 250f, 0.001f)
+    private val valueAnimationSpec =
+        spring<Float>(1f, 1000f, visibilityThreshold)
+    private val velocityAnimationSpec =
+        spring<Float>(0.5f, 300f, visibilityThreshold * 10f)
+    private val pressProgressAnimationSpec =
+        spring<Float>(1f, 1000f, 0.001f)
+    private val scaleXAnimationSpec =
+        spring<Float>(0.6f, 250f, 0.001f)
+    private val scaleYAnimationSpec =
+        spring<Float>(0.7f, 250f, 0.001f)
 
     private val valueAnimation = Animatable(initialValue, visibilityThreshold)
     private val velocityAnimation = Animatable(0f, 5f)
@@ -292,7 +401,6 @@ class DampedDragAnimation(
 
     val modifier: Modifier =
         Modifier.pointerInput(Unit) {
-            // FIXED: Using standalone inspectDragGestures from InteractiveHighlight
             inspectDragGestures(
                 onDragStart = { down ->
                     onDragStarted(down.position)
@@ -314,31 +422,76 @@ class DampedDragAnimation(
     fun press() {
         velocityTracker.resetTracking()
         animationScope.launch {
-            launch { pressProgressAnimation.animateTo(1f, pressProgressAnimationSpec) }
-            launch { scaleXAnimation.animateTo(pressedScale, scaleXAnimationSpec) }
-            launch { scaleYAnimation.animateTo(pressedScale, scaleYAnimationSpec) }
+            launch {
+                pressProgressAnimation.animateTo(
+                    1f,
+                    pressProgressAnimationSpec,
+                )
+            }
+            launch {
+                scaleXAnimation.animateTo(
+                    pressedScale,
+                    scaleXAnimationSpec,
+                )
+            }
+            launch {
+                scaleYAnimation.animateTo(
+                    pressedScale,
+                    scaleYAnimationSpec,
+                )
+            }
         }
     }
 
     fun release() {
         animationScope.launch {
             withFrameNanos {}
+
             if (value != targetValue) {
-                val threshold = (valueRange.endInclusive - valueRange.start) * 0.025f
+                val threshold =
+                    (valueRange.endInclusive - valueRange.start) * 0.025f
+
                 snapshotFlow { valueAnimation.value }
-                    .filter { abs(it - valueAnimation.targetValue) < threshold }
+                    .filter {
+                        abs(it - valueAnimation.targetValue) < threshold
+                    }
                     .first()
             }
-            launch { pressProgressAnimation.animateTo(0f, pressProgressAnimationSpec) }
-            launch { scaleXAnimation.animateTo(initialScale, scaleXAnimationSpec) }
-            launch { scaleYAnimation.animateTo(initialScale, scaleYAnimationSpec) }
+
+            launch {
+                pressProgressAnimation.animateTo(
+                    0f,
+                    pressProgressAnimationSpec,
+                )
+            }
+            launch {
+                scaleXAnimation.animateTo(
+                    initialScale,
+                    scaleXAnimationSpec,
+                )
+            }
+            launch {
+                scaleYAnimation.animateTo(
+                    initialScale,
+                    scaleYAnimationSpec,
+                )
+            }
         }
     }
 
     fun updateValue(value: Float) {
-        val target = value.coerceIn(valueRange.start, valueRange.endInclusive)
+        val target = value.coerceIn(
+            valueRange.start,
+            valueRange.endInclusive,
+        )
+
         animationScope.launch {
-            valueAnimation.animateTo(target, valueAnimationSpec) { updateVelocity() }
+            valueAnimation.animateTo(
+                target,
+                valueAnimationSpec,
+            ) {
+                updateVelocity()
+            }
         }
     }
 
@@ -346,20 +499,48 @@ class DampedDragAnimation(
         animationScope.launch {
             mutatorMutex.mutate {
                 press()
-                val target = value.coerceIn(valueRange.start, valueRange.endInclusive)
-                launch { valueAnimation.animateTo(target, valueAnimationSpec) }
-                if (velocity != 0f) {
-                    launch { velocityAnimation.animateTo(0f, velocityAnimationSpec) }
+
+                val target = value.coerceIn(
+                    valueRange.start,
+                    valueRange.endInclusive,
+                )
+
+                launch {
+                    valueAnimation.animateTo(
+                        target,
+                        valueAnimationSpec,
+                    )
                 }
+
+                if (velocity != 0f) {
+                    launch {
+                        velocityAnimation.animateTo(
+                            0f,
+                            velocityAnimationSpec,
+                        )
+                    }
+                }
+
                 release()
             }
         }
     }
 
     private fun updateVelocity() {
-        velocityTracker.addPosition(SystemClock.uptimeMillis(), Offset(value, 0f))
+        velocityTracker.addPosition(
+            SystemClock.uptimeMillis(),
+            Offset(value, 0f),
+        )
+
         val targetVelocity =
-            velocityTracker.calculateVelocity().x / (valueRange.endInclusive - valueRange.start)
-        animationScope.launch { velocityAnimation.animateTo(targetVelocity, velocityAnimationSpec) }
+            velocityTracker.calculateVelocity().x /
+                (valueRange.endInclusive - valueRange.start)
+
+        animationScope.launch {
+            velocityAnimation.animateTo(
+                targetVelocity,
+                velocityAnimationSpec,
+            )
+        }
     }
 }
