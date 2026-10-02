@@ -696,11 +696,7 @@ class MainActivity : ComponentActivity() {
                 modifier =
                     Modifier
                         .fillMaxSize()
-                        .background(if (pureBlack) Color.Black else MaterialTheme.colorScheme.surface)
-                        .then(
-                            if (glassFloatingNavEnabled && useFloatingNavBar) Modifier.layerBackdrop(navigationBackdrop)
-                            else Modifier,
-                        ),
+                        .background(if (pureBlack) Color.Black else MaterialTheme.colorScheme.surface),
             ) {
                 val (backgroundBlurOn) = rememberPreference(BackgroundBlurEnabledKey, defaultValue = true)
 
@@ -1446,7 +1442,18 @@ class MainActivity : ComponentActivity() {
                             Box(
                                 Modifier
                                     .weight(1f)
-                                    .hazeSource(navigationHazeState),
+                                    .hazeSource(navigationHazeState)
+                                    // Kyant0/SimpMusic architecture: the page content is the
+                                    // backdrop SOURCE, while the floating glass navigation is a
+                                    // sibling in Scaffold.bottomBar. Never put the glass surface
+                                    // inside this source layer.
+                                    .then(
+                                        if (glassFloatingNavEnabled && useFloatingNavBar) {
+                                            Modifier.layerBackdrop(navigationBackdrop)
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
                             ) {
                                 NavHost(
                                     navController = navController,
