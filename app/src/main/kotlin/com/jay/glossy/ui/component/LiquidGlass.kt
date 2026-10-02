@@ -30,7 +30,6 @@ import androidx.compose.ui.util.fastCoerceAtMost
 import com.kyant.backdrop.*
 import com.kyant.backdrop.effects.*
 import com.kyant.backdrop.backdrops.LayerBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop as kyantLayerBackdrop
 
 import kotlin.math.abs
@@ -41,12 +40,12 @@ import kotlin.math.sign
 import kotlin.math.tanh
 
 @Composable
+@Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
 fun rememberBackdrop(color: Color = Color.Unspecified): Backdrop {
-    // Kyant0's LayerBackdrop already records the parent content through its
-    // layerBackdrop modifier. Keep the default drawContent() recorder here;
-    // adding another drawRect/color layer can produce an invalid draw source
-    // and can crash on some Compose renderer paths.
-    return rememberLayerBackdrop()
+    val graphicsLayer = rememberGraphicsLayer()
+    return remember(graphicsLayer) { 
+        LayerBackdrop(graphicsLayer = graphicsLayer, onDraw = {}) 
+    }
 }
 
 @Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
