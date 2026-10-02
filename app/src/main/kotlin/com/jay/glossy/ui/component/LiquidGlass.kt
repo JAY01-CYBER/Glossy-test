@@ -30,6 +30,7 @@ import androidx.compose.ui.util.fastCoerceAtMost
 import com.kyant.backdrop.*
 import com.kyant.backdrop.effects.*
 import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop as kyantLayerBackdrop
 
 import kotlin.math.abs
@@ -40,11 +41,14 @@ import kotlin.math.sign
 import kotlin.math.tanh
 
 @Composable
-@Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
 fun rememberBackdrop(color: Color = Color.Unspecified): Backdrop {
-    val graphicsLayer = rememberGraphicsLayer()
-    return remember(graphicsLayer) { 
-        LayerBackdrop(graphicsLayer = graphicsLayer, onDraw = {}) 
+    // IMPORTANT: the backdrop source must record the actual parent content.
+    // An empty LayerBackdrop produces a transparent/flat pill because there is
+    // nothing for Kyant's blur/lens shader to sample. SimpMusic uses
+    // rememberLayerBackdrop { drawRect(...); drawContent() } for exactly this reason.
+    return rememberLayerBackdrop {
+        drawRect(color)
+        drawContent()
     }
 }
 
