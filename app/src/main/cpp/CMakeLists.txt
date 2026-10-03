@@ -22,15 +22,19 @@ set_target_properties(avutil PROPERTIES IMPORTED_LOCATION ${FFMPEG_DIR}/libavuti
 add_library(swresample SHARED IMPORTED)
 set_target_properties(swresample PROPERTIES IMPORTED_LOCATION ${FFMPEG_DIR}/libswresample.so)
 
-#  main native engine
+# main native engine
 add_library(glossy_engine SHARED
     glossy_engine.cpp
     GlossyNativePlayer.cpp
 )
 
-target_include_directories(glossy_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+#  YAHAN MAINE INCLUDE FOLDER KA PATH ADD KAR DIYA HAI 
+target_include_directories(glossy_engine PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 
-# FFmpeg aur system libraries 
+# FFmpeg aur system libraries ko link karna
 target_link_libraries(glossy_engine
     oboe::oboe
     mediandk
