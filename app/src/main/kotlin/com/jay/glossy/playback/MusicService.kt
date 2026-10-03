@@ -433,24 +433,109 @@ class MusicService :
 
     fun isGlossyNativeEngine(): Boolean = audioEngineMode == AudioEngineMode.GLOSSY_NATIVE
 
+    private val _playerFlow = MutableStateFlow<Player?>(null)
+    val playerFlow = _playerFlow.asStateFlow()
+    private var nativePlaybackMonitorJob: Job? = null
+
     suspend fun switchAudioEngine(mode: AudioEngineMode) {
         if (!::player.isInitialized || mode == audioEngineMode) return
         audioEngineMode = mode
-        nativeAudioProcessor.setRoutingEnabled(mode == AudioEngineMode.GLOSSY_NATIVE)
-        // ExoPlayer remains the sole decoder, buffering owner and AudioSink owner in both
-        // modes. Glossy Native mode means the decoded PCM is processed by the C++ DSP
-        // AudioProcessor; it does not create a second competing decoder/output clock.
-        player.volume = calculateEffectiveVolume()
+        
         if (mode == AudioEngineMode.GLOSSY_NATIVE) {
+            // 1. EXOPLAYER KO PAUSE KARO (0% CPU, 0% Battery Drain)
+            player.pause() 
+            
+            // 2. Apne Facade ko initialize aur set karo
+            if (glossyNativeMediaPlayer == null) {
+                glossyNativeMediaPlayer = GlossyNativeMediaPlayer(this, Looper.getMainLooper(), scope)
+            }
+            mediaSession?.player = glossyNativeMediaPlayer!!
+            _playerFlow.value = glossyNativeMediaPlayer
+            
+            startGlossyNativeForCurrentItem()
+        } else {
+            // 1. FFmpeg ko roko
+            nativePlaybackMonitorJob?.cancel()
             glossyNativePlayer.stop()
+            
+            // 2. ExoPlayer ko wapas zinda karo
+            mediaSession?.player = player
+            _playerFlow.value = player
+            applyEffectiveVolume()
+            if (glossyNativeMediaPlayer?.playWhenReady == true) {
+                player.play()
+            }
         }
-        applyEffectiveVolume()
     }
 
     suspend fun startGlossyNativeForCurrentItem() {
-        // Kept for source compatibility with existing callers. Playback is already owned by
-        // ExoPlayer; the native Glossy engine is inserted into its AudioProcessorChain.
-        nativeAudioProcessor.setRoutingEnabled(audioEngineMode == AudioEngineMode.GLOSSY_NATIVE)
+        if (audioEngineMode != AudioEngineMode.GLOSSY_NATIVE) {
+            nativeAudioProcessor.setRoutingEnabled(false)
+            glossyNativePlayer.stop()
+            applyEffectiveVolume()
+            return
+        }
+
+        nativeStartMutex.withLock {
+            val generation = nativeStartGeneration.incrementAndGet()
+            val currentMediaItem = player.currentMediaItem ?: return
+            val mediaId = currentMediaItem.mediaId
+
+            // ExoPlayer ko background mein mute aur pause kar do
+            player.pause() 
+            nativeAudioProcessor.setRoutingEnabled(false)
+
+            // YouTube / Stream URL nikalo
+            val url = songUrlCache[mediaId]?.first ?: run {
+                try {
+                    val song = database.songEntity(mediaId)
+                    val playbackData = YTPlayerUtils.playerResponseForPlayback(
+                        videoId = mediaId,
+                        audioQuality = audioQuality,
+                        connectivityManager = connectivityManager,
+                        contentHints = ContentHints(
+                            isExplicit = song?.explicit,
+                            isUploaded = song?.isUploaded,
+                        )
+                    ).getOrNull()
+                    playbackData?.streamUrl
+                } catch (e: Exception) {
+                    null
+                }
+            }
+
+            // Apne naye FFmpeg C++ Player ko URL bhej do!
+            if (url != null && generation == nativeStartGeneration.get()) {
+                withContext(Dispatchers.IO) {
+                    glossyNativePlayer.playUrl(url, player.currentPosition)
+                    glossyNativePlayer.syncDsp()
+                }
+                
+                glossyNativeMediaPlayer?.playWhenReady = true
+
+                // AUTO-ADVANCE TRACKER
+                nativePlaybackMonitorJob?.cancel()
+                nativePlaybackMonitorJob = scope.launch(Dispatchers.Default) {
+                    delay(1500)
+                    while (isActive && audioEngineMode == AudioEngineMode.GLOSSY_NATIVE) {
+                        if (!glossyNativePlayer.isPlaying() && glossyNativePlayer.position() > 0) {
+                            val dur = glossyNativePlayer.duration()
+                            val pos = glossyNativePlayer.position()
+                            
+                            if (dur > 0 && pos >= dur - 1500) {
+                                withContext(Dispatchers.Main) {
+                                    Timber.tag(TAG).d("FFmpeg finished playing. Auto-advancing queue.")
+                                    player.seekToNextMediaItem()
+                                    startGlossyNativeForCurrentItem()
+                                }
+                                break
+                            }
+                        }
+                        delay(500)
+                    }
+                }
+            }
+        }
     }
 
 
@@ -515,9 +600,6 @@ class MusicService :
     // runBlocking reads that were each blocking the main thread.
     @Volatile
     private var startupPrefs: Preferences? = null
-
-    private val _playerFlow = MutableStateFlow<ExoPlayer?>(null)
-    val playerFlow = _playerFlow.asStateFlow()
 
     private val playerSilenceProcessors = HashMap<Player, SilenceDetectorAudioProcessor>()
 
