@@ -17,7 +17,6 @@ import androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM
 import androidx.media3.common.Player.REPEAT_MODE_OFF
 import androidx.media3.common.Player.STATE_ENDED
 import androidx.media3.common.Timeline
-import androidx.media3.exoplayer.ExoPlayer
 import com.jay.glossy.constants.SleepTimerCustomDaysKey
 import com.jay.glossy.constants.SleepTimerDayTimesKey
 import com.jay.glossy.constants.SleepTimerDefaultKey
@@ -65,18 +64,17 @@ class PlayerConnection(
     val service = binder.service
     private val playerReadinessFlow = service.isPlayerReady
 
-    /** Media3 now owns the actual audio clock, so lyrics use the same clock as playback. */
     val realCurrentPosition: Long
         get() = if (service.isGlossyNativeEngine()) service.glossyNativePlayer.position() else getPlayerOrNull()?.currentPosition ?: 0L
 
-    private fun getPlayerSafe(): ExoPlayer {
+    private fun getPlayerSafe(): Player {
         check(playerReadinessFlow.value) {
             "Player not yet initialized in MusicService; " +
                 "service.isPlayerReady=${playerReadinessFlow.value}"
         }
         return try {
-            service.player
-        } catch (e: UninitializedPropertyAccessException) {
+            service.playerFlow.value ?: service.player
+        } catch (e: Exception) {
             throw IllegalStateException(
                 "MusicService.player field not initialized despite isPlayerReady=true; " +
                     "possible race condition in service startup",
@@ -85,17 +83,15 @@ class PlayerConnection(
         }
     }
 
-    private fun getPlayerOrNull(): ExoPlayer? =
+    private fun getPlayerOrNull(): Player? =
         try {
-            if (!playerReadinessFlow.value) return null
-            service.player
-        } catch (_: UninitializedPropertyAccessException) {
-            null
-        } catch (_: NullPointerException) {
+            if (!playerReadinessFlow.value) null
+            else service.playerFlow.value ?: service.player
+        } catch (e: Exception) {
             null
         }
 
-    val player: ExoPlayer
+    val player: Player
         get() = getPlayerSafe()
 
     private val isPlayerInitialized = MutableStateFlow(service.isPlayerReady.value)
@@ -214,8 +210,6 @@ class PlayerConnection(
         if (attachedPlayer == null && readyPlayer != null) {
             updateAttachedPlayer(readyPlayer)
         }
-
-        // Native DSP is now part of Media3's AudioProcessorChain; playback stays owned by ExoPlayer.
 
         Timber.tag(TAG).d("PlayerConnection flow observer registered; playerReady=${playerReadinessFlow.value}")
     }
@@ -535,7 +529,6 @@ class PlayerConnection(
         }
     }
     
-    // YE LINE SEEKBAR (SLIDER) KO SYNC KAREGI
     override fun onPositionDiscontinuity(
         oldPosition: Player.PositionInfo,
         newPosition: Player.PositionInfo,
@@ -607,7 +600,6 @@ class PlayerConnection(
 
     fun dispose() {
         try { 
-            
             attachedPlayer?.removeListener(this)
             attachedPlayer = null
             Timber.tag(TAG).d("PlayerConnection disposed successfully")
