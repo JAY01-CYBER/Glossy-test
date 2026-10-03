@@ -95,7 +95,7 @@ internal fun AppleMusicQueueView(
                 if (!playerConnection.player.shuffleModeEnabled) {
                     playerConnection.player.moveMediaItem(actualFrom, actualTo)
                 } else {
-                    playerConnection.player.setShuffleOrder(
+                    (playerConnection.player as? androidx.media3.exoplayer.ExoPlayer)?.setShuffleOrder(
                         DefaultShuffleOrder(
                             queueWindows.map { it.firstPeriodIndex }
                                 .toMutableList()
