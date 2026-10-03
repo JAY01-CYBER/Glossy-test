@@ -21,6 +21,15 @@
 #include <vector>
 #include "GlossyDspApi.h"
 
+// FFMPEG HEADERS
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/avutil.h>
+#include <libswresample/swresample.h>
+}
+//  ===================================== 
+
 #ifdef LOG_TAG
 #undef LOG_TAG
 #endif
