@@ -998,7 +998,7 @@ fun Queue(
                     if (!playerConnection.player.shuffleModeEnabled) {
                         playerConnection.player.moveMediaItem(safeFrom, safeTo)
                     } else {
-                        playerConnection.player.setShuffleOrder(
+                        (playerConnection.player as? androidx.media3.exoplayer.ExoPlayer)?.setShuffleOrder(
                             DefaultShuffleOrder(
                                 queueWindows.map { it.firstPeriodIndex }
                                     .toMutableList()
