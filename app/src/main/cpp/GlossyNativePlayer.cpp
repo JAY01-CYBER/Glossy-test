@@ -1,13 +1,7 @@
 #include <jni.h>
-#include <media/NdkMediaCodec.h>
-#include <media/NdkMediaExtractor.h>
-#include <media/NdkMediaFormat.h>
-#include <media/NdkMediaDataSource.h>
-#include <android/api-level.h>
 #include <oboe/Oboe.h>
 #include <android/log.h>
 #include <algorithm>
-#include <dlfcn.h>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -21,23 +15,16 @@
 #include <vector>
 #include "GlossyDspApi.h"
 
-// FFMPEG HEADERS
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/channel_layout.h>
 #include <libswresample/swresample.h>
 }
-//  ===================================== 
 
 #ifdef LOG_TAG
 #undef LOG_TAG
-#endif
-#ifdef LOGE
-#undef LOGE
-#endif
-#ifdef LOGI
-#undef LOGI
 #endif
 #define LOG_TAG "GlossyNativePlayer"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -47,9 +34,6 @@ namespace {
 
 constexpr int kOutputRate = 48000;
 constexpr int kOutputChannels = 2;
-constexpr int kPcm16Encoding = 2;
-constexpr int kPcmFloatEncoding = 4;
-constexpr char kPcmEncodingKey[] = "pcm-encoding";
 
 class FloatRing final {
 public:
@@ -102,54 +86,17 @@ private:
     std::atomic<size_t> readPos_{0};
 };
 
-namespace {
-using FnAMediaDataSourceClose = void (*)(AMediaDataSource*);
-using FnAMediaDataSourceDelete = void (*)(AMediaDataSource*);
-using FnAMediaDataSourceNewUri = AMediaDataSource* (*)(const char*, int, const char* const*);
-using FnAMediaExtractorSetDataSourceCustom = media_status_t (*)(AMediaExtractor*, AMediaDataSource*);
-
-void* mediaNdkHandle() {
-    static void* handle = []() -> void* {
-        return dlopen("libmediandk.so", RTLD_NOW | RTLD_LOCAL);
-    }();
-    return handle;
-}
-
-template <typename T>
-T mediaNdkSymbol(const char* name) {
-    void* handle = mediaNdkHandle();
-    return handle ? reinterpret_cast<T>(dlsym(handle, name)) : nullptr;
-}
-
-void closeDataSourceCompat(AMediaDataSource* source) {
-    if (!source) return;
-    if (auto fn = mediaNdkSymbol<FnAMediaDataSourceClose>("AMediaDataSource_close")) fn(source);
-}
-
-void deleteDataSourceCompat(AMediaDataSource* source) {
-    if (!source) return;
-    if (auto fn = mediaNdkSymbol<FnAMediaDataSourceDelete>("AMediaDataSource_delete")) fn(source);
-}
-
-AMediaDataSource* newUriDataSourceCompat(const char* uri, int numHeaders, const char* const* headers) {
-    if (auto fn = mediaNdkSymbol<FnAMediaDataSourceNewUri>("AMediaDataSource_newUri")) {
-        return fn(uri, numHeaders, headers);
-    }
-    return nullptr;
-}
-
-media_status_t setDataSourceCustomCompat(AMediaExtractor* extractor, AMediaDataSource* source) {
-    if (auto fn = mediaNdkSymbol<FnAMediaExtractorSetDataSourceCustom>("AMediaExtractor_setDataSourceCustom")) {
-        return fn(extractor, source);
-    }
-    return AMEDIA_ERROR_UNSUPPORTED;
-}
-} // namespace
-
 class Player final : public oboe::AudioStreamDataCallback {
 public:
-    Player() : ring_(static_cast<size_t>(192000) * 4) {}
-    ~Player() override { stop(); if (dsp_) glossy_dsp_release(dsp_); }
+    Player() : ring_(static_cast<size_t>(192000) * 4) {
+        avformat_network_init(); // Initialize FFmpeg network
+    }
+    
+    ~Player() override { 
+        stop(); 
+        if (dsp_) glossy_dsp_release(dsp_); 
+        avformat_network_deinit();
+    }
 
     bool play(const std::string& url, int64_t startMs) {
         if (url.empty()) return false;
@@ -168,9 +115,9 @@ public:
         paused_.store(false, std::memory_order_release);
         error_.store(false, std::memory_order_release);
         initDone_.store(false, std::memory_order_release);
+        
         worker_ = std::thread(&Player::decodeLoop, this);
-        // Do not report success until native decoder + output path are actually initialized.
-        // This makes the Kotlin fallback decision deterministic instead of optimistic.
+        
         const bool ready = waitUntilReady(15000);
         if (!ready) stop();
         return ready;
@@ -188,10 +135,6 @@ public:
 
     void stop() {
         stopRequested_.store(true, std::memory_order_release);
-        if (dataSource_ && !dataSourceClosed_) {
-            closeDataSourceCompat(dataSource_);
-            dataSourceClosed_ = true;
-        }
         if (stream_) stream_->requestStop();
         if (worker_.joinable()) worker_.join();
         closeCodec();
@@ -214,9 +157,11 @@ public:
         const int rate = std::max(1, outputRate_.load(std::memory_order_acquire));
         return base + static_cast<int64_t>((frames * 1000ULL) / static_cast<uint64_t>(rate));
     }
+    
     int64_t duration() const { return durationMs_.load(std::memory_order_acquire); }
     bool isPlaying() const { return playing_.load(std::memory_order_acquire) && !paused_.load(std::memory_order_acquire); }
     bool hasError() const { return error_.load(std::memory_order_acquire); }
+    
     bool waitUntilReady(int timeoutMs) {
         std::unique_lock<std::mutex> lock(initMutex_);
         initCv_.wait_for(lock, std::chrono::milliseconds(std::max(1, timeoutMs)), [this] {
@@ -247,51 +192,27 @@ public:
         const size_t frames = static_cast<size_t>(std::max<int32_t>(0, numFrames));
         if (!audioData || frames == 0) return oboe::DataCallbackResult::Continue;
 
-        // The ring is always float/stereo. Oboe can negotiate either Float or I16 on
-        // real devices even when Float was requested, so never reinterpret the device
-        // buffer blindly as float. Convert explicitly to the negotiated output format.
         if (scratch_.size() < frames * 2) {
-            // AAudio normally keeps callback sizes at the negotiated burst size. If a
-            // device violates that contract, render silence rather than allocating on
-            // the realtime callback thread.
-            if (outputFormat_ == oboe::AudioFormat::I16) {
-                std::memset(audioData, 0, frames * static_cast<size_t>(outputChannels_) * sizeof(int16_t));
-            } else {
-                std::memset(audioData, 0, frames * static_cast<size_t>(outputChannels_) * sizeof(float));
-            }
+            std::memset(audioData, 0, frames * static_cast<size_t>(outputChannels_) * sizeof(float));
             underruns_.fetch_add(1, std::memory_order_relaxed);
             return oboe::DataCallbackResult::Continue;
         }
+        
         const size_t got = ring_.read(scratch_.data(), frames);
         const float volume = volume_.load(std::memory_order_relaxed);
-        const size_t samples = frames * static_cast<size_t>(outputChannels_);
-
-        if (outputFormat_ == oboe::AudioFormat::I16) {
-            auto* out = static_cast<int16_t*>(audioData);
-            for (size_t f = 0; f < frames; ++f) {
-                const float l = f < got ? std::clamp(scratch_[f * 2] * volume, -1.0f, 1.0f) : 0.0f;
-                const float r = f < got ? std::clamp(scratch_[f * 2 + 1] * volume, -1.0f, 1.0f) : 0.0f;
-                if (outputChannels_ == 1) {
-                    out[f] = static_cast<int16_t>(std::lrintf(0.5f * (l + r) * 32767.0f));
-                } else {
-                    out[f * 2] = static_cast<int16_t>(std::lrintf(l * 32767.0f));
-                    out[f * 2 + 1] = static_cast<int16_t>(std::lrintf(r * 32767.0f));
-                }
-            }
-        } else {
-            auto* out = static_cast<float*>(audioData);
-            for (size_t f = 0; f < frames; ++f) {
-                const float l = f < got ? scratch_[f * 2] * volume : 0.0f;
-                const float r = f < got ? scratch_[f * 2 + 1] * volume : 0.0f;
-                if (outputChannels_ == 1) {
-                    out[f] = 0.5f * (l + r);
-                } else {
-                    out[f * 2] = l;
-                    out[f * 2 + 1] = r;
-                }
+        auto* out = static_cast<float*>(audioData);
+        
+        for (size_t f = 0; f < frames; ++f) {
+            const float l = f < got ? scratch_[f * 2] * volume : 0.0f;
+            const float r = f < got ? scratch_[f * 2 + 1] * volume : 0.0f;
+            if (outputChannels_ == 1) {
+                out[f] = 0.5f * (l + r);
+            } else {
+                out[f * 2] = l;
+                out[f * 2 + 1] = r;
             }
         }
-        (void)samples;
+        
         if (got > 0 && !paused_.load(std::memory_order_relaxed)) {
             renderedFrames_.fetch_add(got, std::memory_order_relaxed);
         }
@@ -301,15 +222,10 @@ public:
 
 private:
     void closeCodec() {
-        if (codec_) { AMediaCodec_stop(codec_); AMediaCodec_delete(codec_); codec_ = nullptr; }
-        if (extractor_) { AMediaExtractor_delete(extractor_); extractor_ = nullptr; }
-        if (trackFormat_) { AMediaFormat_delete(trackFormat_); trackFormat_ = nullptr; }
-        if (dataSource_) {
-            if (!dataSourceClosed_) closeDataSourceCompat(dataSource_);
-            deleteDataSourceCompat(dataSource_);
-            dataSource_ = nullptr;
-        }
-        mime_.clear();
+        if (swrCtx_) { swr_free(&swrCtx_); }
+        if (codecCtx_) { avcodec_free_context(&codecCtx_); }
+        if (formatCtx_) { avformat_close_input(&formatCtx_); }
+        audioStreamIdx_ = -1;
         hasMedia_.store(false, std::memory_order_release);
     }
 
@@ -323,36 +239,25 @@ private:
         builder.setDirection(oboe::Direction::Output)
             ->setFormat(oboe::AudioFormat::Float)
             ->setChannelCount(kOutputChannels)
-            // Let Oboe/AAudio negotiate the device-native rate. We then explicitly
-            // resample decoder PCM to the rate actually returned by the stream.
             ->setSampleRate(kOutputRate)
             ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
             ->setSharingMode(oboe::SharingMode::Shared)
             ->setUsage(oboe::Usage::Media)
             ->setContentType(oboe::ContentType::Music)
             ->setDataCallback(this);
+            
         oboe::Result r = builder.openStream(stream_);
         if (r != oboe::Result::OK) {
             LOGE("Oboe open failed: %s", oboe::convertToText(r));
             return false;
         }
-        const int actualRate = stream_->getSampleRate();
-        const int actualChannels = stream_->getChannelCount();
-        const auto actualFormat = stream_->getFormat();
-        LOGI("Oboe output negotiated: requested=%dHz actual=%dHz/%dch format=%s",
-             kOutputRate, actualRate, actualChannels, oboe::convertToText(actualFormat));
-        if (actualRate <= 0 || (actualChannels != 1 && actualChannels != 2) ||
-            (actualFormat != oboe::AudioFormat::Float && actualFormat != oboe::AudioFormat::I16)) {
-            LOGE("Unsupported Oboe output format: rate=%d channels=%d format=%s", actualRate, actualChannels, oboe::convertToText(actualFormat));
-            closeStream();
-            return false;
-        }
-        outputRate_.store(actualRate, std::memory_order_release);
-        outputChannels_ = actualChannels;
-        outputFormat_ = actualFormat;
+        
+        outputRate_.store(stream_->getSampleRate(), std::memory_order_release);
+        outputChannels_ = stream_->getChannelCount();
+        
         const int32_t burst = stream_->getFramesPerBurst();
         scratch_.assign(static_cast<size_t>(std::max<int32_t>(burst > 0 ? burst : 192, 192)) * 2, 0.0f);
-        LOGI("Oboe output: requested=%d actual=%d channels=%d", kOutputRate, actualRate, actualChannels);
+        
         r = stream_->requestStart();
         if (r != oboe::Result::OK) {
             LOGE("Oboe start failed: %s", oboe::convertToText(r));
@@ -363,314 +268,181 @@ private:
     }
 
     bool openCodec() {
-        extractor_ = AMediaExtractor_new();
-        if (!extractor_) return false;
         std::string url;
         { std::lock_guard<std::mutex> lock(stateMutex_); url = url_; }
-        media_status_t status = AMEDIA_ERROR_UNSUPPORTED;
+
+        // 1. Open Input
+        formatCtx_ = avformat_alloc_context();
+        
+        AVDictionary* options = nullptr;
+        av_dict_set(&options, "user_agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36", 0);
+        av_dict_set(&options, "reconnect", "1", 0);
+        av_dict_set(&options, "reconnect_streamed", "1", 0);
+        av_dict_set(&options, "reconnect_delay_max", "2", 0);
+
+        if (avformat_open_input(&formatCtx_, url.c_str(), nullptr, &options) != 0) {
+            LOGE("FFmpeg: Could not open input");
+            if (options) av_dict_free(&options);
+            return false;
+        }
+        if (options) av_dict_free(&options);
+
+        // 2. Find Stream Info
+        if (avformat_find_stream_info(formatCtx_, nullptr) < 0) {
+            LOGE("FFmpeg: Could not find stream info");
+            return false;
+        }
+
+        // 3. Find Audio Stream
+        const AVCodec* codec = nullptr;
+        audioStreamIdx_ = av_find_best_stream(formatCtx_, AVMEDIA_TYPE_AUDIO, -1, -1, &codec, 0);
+        if (audioStreamIdx_ < 0 || !codec) {
+            LOGE("FFmpeg: Could not find audio stream");
+            return false;
+        }
+
+        // 4. Open Codec
+        codecCtx_ = avcodec_alloc_context3(codec);
+        avcodec_parameters_to_context(codecCtx_, formatCtx_->streams[audioStreamIdx_]->codecpar);
+        if (avcodec_open2(codecCtx_, codec, nullptr) < 0) {
+            LOGE("FFmpeg: Could not open codec");
+            return false;
+        }
+
+        // 5. Setup SwrContext (Resampler to 48kHz, Stereo, Float)
+        AVChannelLayout out_ch_layout;
+        av_channel_layout_default(&out_ch_layout, kOutputChannels);
+
+        swr_alloc_set_opts2(&swrCtx_,
+                            &out_ch_layout, AV_SAMPLE_FMT_FLT, kOutputRate,
+                            &codecCtx_->ch_layout, codecCtx_->sample_fmt, codecCtx_->sample_rate,
+                            0, nullptr);
+                            
+        if (swr_init(swrCtx_) < 0) {
+            LOGE("FFmpeg: Failed to initialize resampler");
+            return false;
+        }
+
+        // 6. Set Duration
+        if (formatCtx_->duration != AV_NOPTS_VALUE) {
+            durationMs_.store(formatCtx_->duration / (AV_TIME_BASE / 1000), std::memory_order_release);
+        }
+
+        // 7. Open Oboe Stream & Configure DSP
+        if (!openStream()) return false;
+        
         {
-            const char* headers[] = {
-                "User-Agent",
-                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36",
-                "Accept",
-                "*/*",
-                "Connection",
-                "keep-alive"
-            };
-            AMediaDataSource* source = newUriDataSourceCompat(url.c_str(), 3, headers);
-            if (source) {
-                dataSource_ = source;
-                dataSourceClosed_ = false;
-                status = setDataSourceCustomCompat(extractor_, source);
-                if (status != AMEDIA_OK) {
-                    closeDataSourceCompat(source);
-                    deleteDataSourceCompat(source);
-                    dataSource_ = nullptr;
-                }
-            }
-        }
-        if (status != AMEDIA_OK) {
-            status = AMediaExtractor_setDataSource(extractor_, url.c_str());
-        }
-        if (status != AMEDIA_OK) { LOGE("Extractor setDataSource failed: %d", status); return false; }
-
-        const size_t count = AMediaExtractor_getTrackCount(extractor_);
-        for (size_t i = 0; i < count; ++i) {
-            AMediaFormat* fmt = AMediaExtractor_getTrackFormat(extractor_, i);
-            const char* mime = nullptr;
-            const bool audio = fmt && AMediaFormat_getString(fmt, AMEDIAFORMAT_KEY_MIME, &mime) &&
-                               mime && std::strncmp(mime, "audio/", 6) == 0;
-            if (!audio) { if (fmt) AMediaFormat_delete(fmt); continue; }
-
-            trackFormat_ = fmt;
-            AMediaExtractor_selectTrack(extractor_, i);
-            mime_ = mime;
-            AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sourceRate_);
-            AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &sourceChannels_);
-            sourceRate_ = std::clamp(sourceRate_, 8000, 192000);
-            trackSourceRate_ = sourceRate_;
-            sourceChannels_ = std::clamp(sourceChannels_, 1, 2);
-            int64_t durationUs = 0;
-            if (AMediaFormat_getInt64(fmt, AMEDIAFORMAT_KEY_DURATION, &durationUs) && durationUs > 0) {
-                durationMs_.store(durationUs / 1000, std::memory_order_release);
-            }
-            int32_t pcmEncoding = kPcm16Encoding;
-            AMediaFormat_getInt32(fmt, kPcmEncodingKey, &pcmEncoding);
-            pcmEncoding_ = pcmEncoding;
-            outputFormatLocked_ = false;
-
-            codec_ = AMediaCodec_createDecoderByType(mime_.c_str());
-            if (!codec_) return false;
-            if (AMediaCodec_configure(codec_, fmt, nullptr, nullptr, 0) != AMEDIA_OK) return false;
-            if (AMediaCodec_start(codec_) != AMEDIA_OK) return false;
-            if (!openStream()) return false;
-            {
-                std::lock_guard<std::mutex> lock(dspMutex_);
-                if (!dsp_) dsp_ = glossy_dsp_create();
-                if (!dsp_) return false;
-                glossy_dsp_configure(dsp_, outputRate_.load(std::memory_order_acquire), kOutputChannels, 4);
+            std::lock_guard<std::mutex> lock(dspMutex_);
+            if (!dsp_) dsp_ = glossy_dsp_create();
+            if (dsp_) {
+                glossy_dsp_configure(dsp_, outputRate_.load(std::memory_order_acquire), kOutputChannels, 4); // 4 = Float
                 dspDirty_ = false;
             }
-            hasMedia_.store(true, std::memory_order_release);
-            return true;
         }
-        return false;
+        
+        hasMedia_.store(true, std::memory_order_release);
+        return true;
     }
 
     void resetDsp() {
         std::lock_guard<std::mutex> lock(dspMutex_);
-        if (dsp_) { glossy_dsp_reset(dsp_); glossy_dsp_configure(dsp_, outputRate_.load(std::memory_order_acquire), kOutputChannels, 4); }
-    }
-
-    float decodeSample(const uint8_t* data, size_t index) const {
-        switch (pcmEncoding_) {
-            case kPcmFloatEncoding: {
-                float v; std::memcpy(&v, data + index * sizeof(float), sizeof(float)); return std::clamp(v, -1.0f, 1.0f);
-            }
-            case 3: { // PCM 8-bit unsigned
-                return (static_cast<int>(data[index]) - 128) / 128.0f;
-            }
-            default: {
-                int16_t v; std::memcpy(&v, data + index * sizeof(int16_t), sizeof(int16_t)); return static_cast<float>(v) / 32768.0f;
-            }
-        }
-    }
-
-    size_t decodeToStereo(const uint8_t* pcm, size_t bytes, std::vector<float>& stereo) {
-        if (!pcm || bytes == 0 || sourceChannels_ < 1) return 0;
-        size_t bytesPerSample = pcmEncoding_ == kPcmFloatEncoding ? 4 : (pcmEncoding_ == 3 ? 1 : 2);
-        const size_t frameBytes = bytesPerSample * static_cast<size_t>(sourceChannels_);
-        if (frameBytes == 0) return 0;
-        const size_t frames = bytes / frameBytes;
-        stereo.resize(frames * 2);
-        for (size_t f = 0; f < frames; ++f) {
-            const size_t base = f * static_cast<size_t>(sourceChannels_);
-            const float l = decodeSample(pcm, base);
-            const float r = sourceChannels_ > 1 ? decodeSample(pcm, base + 1) : l;
-            stereo[f * 2] = l; stereo[f * 2 + 1] = r;
-        }
-        return frames;
-    }
-
-    // Streaming linear resampler. It keeps one source frame across codec output boundaries.
-    size_t resample(const std::vector<float>& input, size_t frames, std::vector<float>& output) {
-        if (frames == 0) return 0;
-        const int outputRate = std::max(1, outputRate_.load(std::memory_order_acquire));
-        if (sourceRate_ == outputRate) { output = input; return frames; }
-        std::vector<float> work;
-        work.reserve((frames + 1) * 2);
-        if (havePrev_) { work.push_back(prevL_); work.push_back(prevR_); }
-        work.insert(work.end(), input.begin(), input.begin() + static_cast<std::ptrdiff_t>(frames * 2));
-        const size_t workFrames = work.size() / 2;
-        const double step = static_cast<double>(sourceRate_) / static_cast<double>(outputRate);
-        double pos = resamplePos_;
-        output.clear();
-        while (pos + 1.0 < static_cast<double>(workFrames)) {
-            const size_t i = static_cast<size_t>(pos);
-            const double frac = pos - static_cast<double>(i);
-            const float l0 = work[i * 2], r0 = work[i * 2 + 1];
-            const float l1 = work[(i + 1) * 2], r1 = work[(i + 1) * 2 + 1];
-            output.push_back(l0 + static_cast<float>((l1 - l0) * frac));
-            output.push_back(r0 + static_cast<float>((r1 - r0) * frac));
-            pos += step;
-        }
-        prevL_ = work[(workFrames - 1) * 2];
-        prevR_ = work[(workFrames - 1) * 2 + 1];
-        havePrev_ = true;
-        resamplePos_ = pos - static_cast<double>(workFrames - 1);
-        return output.size() / 2;
-    }
-
-    void resetResampler() {
-        havePrev_ = false; prevL_ = prevR_ = 0.0f; resamplePos_ = 0.0;
-    }
-
-    void performSeek() {
-        if (!extractor_ || !codec_) return;
-        const int64_t targetMs = std::max<int64_t>(0, seekMs_.load(std::memory_order_acquire));
-        AMediaExtractor_seekTo(extractor_, targetMs * 1000, AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);
-        AMediaCodec_flush(codec_);
-        ring_.clear();
-        resetResampler();
-        resetDsp();
-        positionMs_.store(targetMs, std::memory_order_release);
-        playbackBaseMs_.store(targetMs, std::memory_order_release);
-        renderedFrames_.store(0, std::memory_order_release);
-        positionPrimed_.store(false, std::memory_order_release);
-        seekRequested_.store(false, std::memory_order_release);
-    }
-
-    void processDecoded(const uint8_t* pcm, size_t bytes, int64_t ptsUs) {
-        std::vector<float> stereo;
-        const size_t frames = decodeToStereo(pcm, bytes, stereo);
-        if (!frames) return;
-
-        // Decoder output format is the authoritative PCM clock. Do not infer or change
-        // sample rate from PTS deltas: a timestamp discontinuity must never change the
-        // audio clock mid-song (that can turn 48 kHz PCM into an audible 4x speed jump).
-
-        std::vector<float> resampled;
-        const size_t outFrames = resample(stereo, frames, resampled);
-        if (!outFrames) return;
-        std::vector<float> processed(resampled.size());
-        {
-            std::lock_guard<std::mutex> lock(dspMutex_);
-            if (dsp_) {
-                if (dspDirty_) { glossy_dsp_configure(dsp_, outputRate_.load(std::memory_order_acquire), kOutputChannels, 4); dspDirty_ = false; }
-                glossy_dsp_process(dsp_, resampled.data(), processed.data(), static_cast<int>(resampled.size() * sizeof(float)));
-            } else {
-                processed = resampled;
-            }
-        }
-        ring_.write(processed.data(), outFrames);
-        // Position is derived from frames actually consumed by Oboe, not decoder PTS.
-        // Decoder PTS can run ahead by the entire PCM buffer. Prime the base once from the
-        // first decoded timestamp so a seek lands on the decoder's actual sync position.
-        bool expected = false;
-        if (ptsUs >= 0 && positionPrimed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-            playbackBaseMs_.store(ptsUs / 1000, std::memory_order_release);
-        }
-    }
-
-    void flushResamplerAtEos() {
-        const int outputRate = std::max(1, outputRate_.load(std::memory_order_acquire));
-        if (sourceRate_ == outputRate || !havePrev_) return;
-        std::vector<float> tail = {prevL_, prevR_};
-        std::vector<float> out;
-        // Duplicate the final source frame so the final interpolation interval can be emitted.
-        tail.push_back(prevL_); tail.push_back(prevR_);
-        resamplePos_ = std::max(0.0, resamplePos_);
-        const size_t frames = resample(tail, 2, out);
-        if (frames > 0) {
-            std::vector<float> processed(out.size());
-            std::lock_guard<std::mutex> lock(dspMutex_);
-            if (dsp_) glossy_dsp_process(dsp_, out.data(), processed.data(), static_cast<int>(out.size() * sizeof(float)));
-            else processed = out;
-            ring_.write(processed.data(), frames);
+        if (dsp_) { 
+            glossy_dsp_reset(dsp_); 
+            glossy_dsp_configure(dsp_, outputRate_.load(std::memory_order_acquire), kOutputChannels, 4); 
         }
     }
 
     void decodeLoop() {
         if (!openCodec()) {
-            // Native mode is intentionally self-contained: MediaCodec/MediaExtractor are
-            // the decoder path and Oboe is the PCM output path. Do not silently switch
-            // engines here; the Kotlin layer must keep the user's selected engine.
-            LOGE("Glossy native decoder/output initialization failed");
+            LOGE("Glossy FFmpeg decoder/output initialization failed");
             error_.store(true, std::memory_order_release);
             playing_.store(false, std::memory_order_release);
             initDone_.store(true, std::memory_order_release);
             initCv_.notify_all();
             return;
         }
+        
         playing_.store(true, std::memory_order_release);
         initDone_.store(true, std::memory_order_release);
         initCv_.notify_all();
-        if (seekRequested_.load(std::memory_order_acquire)) performSeek();
 
-        AMediaCodecBufferInfo info{};
-        bool inputDone = false;
+        AVPacket* pkt = av_packet_alloc();
+        AVFrame* frame = av_frame_alloc();
+        std::vector<float> resampledData;
+
         while (!stopRequested_.load(std::memory_order_acquire)) {
-            if (seekRequested_.load(std::memory_order_acquire)) { inputDone = false; performSeek(); }
+            
+            // Handle Seeking
+            if (seekRequested_.load(std::memory_order_acquire)) {
+                int64_t targetMs = std::max<int64_t>(0, seekMs_.load(std::order_acquire));
+                int64_t targetPts = targetMs * AV_TIME_BASE / 1000;
+                
+                av_seek_frame(formatCtx_, -1, targetPts, AVSEEK_FLAG_BACKWARD);
+                avcodec_flush_buffers(codecCtx_);
+                
+                ring_.clear();
+                resetDsp();
+                playbackBaseMs_.store(targetMs, std::memory_order_release);
+                renderedFrames_.store(0, std::memory_order_release);
+                seekRequested_.store(false, std::memory_order_release);
+            }
+            
+            // Handle Pausing
             if (paused_.load(std::memory_order_acquire)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 continue;
             }
-            if (!inputDone) {
-                const ssize_t index = AMediaCodec_dequeueInputBuffer(codec_, 10000);
-                if (index >= 0) {
-                    size_t capacity = 0;
-                    uint8_t* buffer = AMediaCodec_getInputBuffer(codec_, index, &capacity);
-                    const ssize_t sampleSize = buffer ? AMediaExtractor_readSampleData(extractor_, buffer, capacity) : -1;
-                    if (sampleSize < 0) {
-                        AMediaCodec_queueInputBuffer(codec_, index, 0, 0, 0, AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
-                        inputDone = true;
-                    } else {
-                        const int64_t pts = AMediaExtractor_getSampleTime(extractor_);
-                        AMediaCodec_queueInputBuffer(codec_, index, 0, sampleSize, std::max<int64_t>(0, pts), 0);
-                        AMediaExtractor_advance(extractor_);
-                    }
-                }
-            }
 
-            const ssize_t outIndex = AMediaCodec_dequeueOutputBuffer(codec_, &info, 10000);
-            if (outIndex >= 0) {
-                if (info.size > 0) {
-                    size_t size = 0;
-                    uint8_t* pcm = AMediaCodec_getOutputBuffer(codec_, outIndex, &size);
-                    if (pcm && info.offset >= 0 && static_cast<size_t>(info.offset) < size) {
-                        const size_t available = size - static_cast<size_t>(info.offset);
-                        const size_t bytes = std::min<size_t>(static_cast<size_t>(info.size), available);
-                        processDecoded(pcm + info.offset, bytes, info.presentationTimeUs);
-                    }
-                }
-                const bool eos = (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0;
-                AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
-                if (eos) { flushResamplerAtEos(); break; }
-            } else if (outIndex == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
-                AMediaFormat* fmt = AMediaCodec_getOutputFormat(codec_);
-                if (fmt) {
-                    int32_t outputRate = sourceRate_;
-                    int32_t outputChannels = sourceChannels_;
-                    int32_t outputEncoding = pcmEncoding_;
-                    AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_SAMPLE_RATE, &outputRate);
-                    AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &outputChannels);
-                    AMediaFormat_getInt32(fmt, kPcmEncodingKey, &outputEncoding);
+            // Read Frame
+            if (av_read_frame(formatCtx_, pkt) >= 0) {
+                if (pkt->stream_index == audioStreamIdx_) {
+                    if (avcodec_send_packet(codecCtx_, pkt) == 0) {
+                        while (avcodec_receive_frame(codecCtx_, frame) == 0) {
+                            
+                            // Resample decoded frame to 48kHz, Float, Stereo
+                            int outSamples = swr_get_out_samples(swrCtx_, frame->nb_samples);
+                            if (resampledData.size() < outSamples * 2) {
+                                resampledData.resize(outSamples * 2);
+                            }
 
-                    const int oldRate = sourceRate_;
-                    const int oldChannels = sourceChannels_;
-                    const int oldEncoding = pcmEncoding_;
+                            uint8_t* outData[1] = { reinterpret_cast<uint8_t*>(resampledData.data()) };
+                            int converted = swr_convert(swrCtx_, outData, outSamples, (const uint8_t**)frame->data, frame->nb_samples);
 
-                    // MediaCodec's first output format describes the actual PCM that follows.
-                    // Lock the decoder clock to that format for the lifetime of this stream.
-                    // A later format notification is not allowed to silently change the sample
-                    // rate mid-song; doing so can create the exact sudden 2x/4x speed jump we
-                    // are protecting against. A real format change requires a new decoder
-                    // session, not an in-place clock mutation.
-                    const bool validRate = outputRate >= 8000 && outputRate <= 192000;
-                    const bool validChannels = outputChannels >= 1 && outputChannels <= 2;
-                    const bool validEncoding = outputEncoding == kPcm16Encoding || outputEncoding == 3 || outputEncoding == kPcmFloatEncoding;
-                    if (validRate && validChannels && validEncoding) {
-                        if (!outputFormatLocked_) {
-                            sourceRate_ = outputRate;
-                            sourceChannels_ = outputChannels;
-                            pcmEncoding_ = outputEncoding;
-                            outputFormatLocked_ = true;
-                            resetResampler();
-                            resetDsp();
-                            LOGI("MediaCodec PCM format locked: track=%dHz/%dch -> output=%dHz/%dch/enc=%d, oboe=%dHz",
-                                 trackSourceRate_, oldChannels, sourceRate_, sourceChannels_, pcmEncoding_,
-                                 outputRate_.load(std::memory_order_acquire));
-                        } else if (outputRate != sourceRate_ || outputChannels != sourceChannels_ || outputEncoding != pcmEncoding_) {
-                            LOGE("Ignoring mid-stream PCM format change: locked=%dHz/%dch/enc=%d reported=%dHz/%dch/enc=%d",
-                                 sourceRate_, sourceChannels_, pcmEncoding_, outputRate, outputChannels, outputEncoding);
+                            if (converted > 0) {
+                                std::vector<float> processed(converted * 2);
+                                {
+                                    std::lock_guard<std::mutex> lock(dspMutex_);
+                                    if (dsp_) {
+                                        glossy_dsp_process(dsp_, resampledData.data(), processed.data(), converted * 2 * sizeof(float));
+                                    } else {
+                                        processed.assign(resampledData.begin(), resampledData.begin() + converted * 2);
+                                    }
+                                }
+                                
+                                ring_.write(processed.data(), converted);
+
+                                // Update Time
+                                if (frame->pts != AV_NOPTS_VALUE) {
+                                    int64_t timeMs = frame->pts * av_q2d(formatCtx_->streams[audioStreamIdx_]->time_base) * 1000;
+                                    
+                                    bool expected = false;
+                                    if (positionPrimed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                                        playbackBaseMs_.store(timeMs, std::memory_order_release);
+                                    }
+                                }
+                            }
                         }
-                    } else {
-                        LOGE("Invalid MediaCodec PCM format: %dHz/%dch/enc=%d", outputRate, outputChannels, outputEncoding);
                     }
-                    AMediaFormat_delete(fmt);
                 }
+                av_packet_unref(pkt);
+            } else {
+                // End of File Reached
+                break;
             }
         }
+
+        av_frame_free(&frame);
+        av_packet_free(&pkt);
         closeStream();
         playing_.store(false, std::memory_order_release);
         hasMedia_.store(false, std::memory_order_release);
@@ -681,30 +453,22 @@ private:
     std::mutex initMutex_;
     std::condition_variable initCv_;
     std::string url_;
-    std::string mime_;
-    AMediaExtractor* extractor_ = nullptr;
-    AMediaCodec* codec_ = nullptr;
-    AMediaFormat* trackFormat_ = nullptr;
-    AMediaDataSource* dataSource_ = nullptr;
-    bool dataSourceClosed_ = false;
+    
+    // FFmpeg Contexts
+    AVFormatContext* formatCtx_ = nullptr;
+    AVCodecContext* codecCtx_ = nullptr;
+    SwrContext* swrCtx_ = nullptr;
+    int audioStreamIdx_ = -1;
+    
     std::shared_ptr<oboe::AudioStream> stream_;
     std::thread worker_;
     FloatRing ring_;
     void* dsp_ = nullptr;
 
-    int sourceRate_ = 48000;
-    int trackSourceRate_ = 48000;
     std::atomic<int> outputRate_{kOutputRate};
     int outputChannels_ = kOutputChannels;
-    oboe::AudioFormat outputFormat_ = oboe::AudioFormat::Float;
     std::vector<float> scratch_;
-    int sourceChannels_ = 2;
-    int pcmEncoding_ = kPcm16Encoding;
-    bool outputFormatLocked_ = false;
     bool dspDirty_ = false;
-    bool havePrev_ = false;
-    float prevL_ = 0.0f, prevR_ = 0.0f;
-    double resamplePos_ = 0.0;
 
     std::atomic<bool> stopRequested_{false};
     std::atomic<bool> paused_{false};
@@ -715,7 +479,6 @@ private:
     std::atomic<bool> initDone_{false};
     std::atomic<uint64_t> underruns_{0};
     std::atomic<int64_t> seekMs_{0};
-    std::atomic<int64_t> positionMs_{0};
     std::atomic<int64_t> playbackBaseMs_{0};
     std::atomic<uint64_t> renderedFrames_{0};
     std::atomic<bool> positionPrimed_{false};
@@ -727,12 +490,14 @@ private:
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_jay_glossy_ui_player_NativePlayer_nCreate(JNIEnv*, jobject) { return reinterpret_cast<jlong>(new Player()); }
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_jay_glossy_ui_player_NativePlayer_nPlayUrl(JNIEnv* env, jobject, jlong h, jstring url, jlong pos) {
     auto* p = reinterpret_cast<Player*>(h); if (!p || !url) return JNI_FALSE;
     const char* s = env->GetStringUTFChars(url, nullptr); if (!s) return JNI_FALSE;
     const bool ok = p->play(s, pos); env->ReleaseStringUTFChars(url, s); return ok ? JNI_TRUE : JNI_FALSE;
 }
+
 extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nPause(JNIEnv*, jobject, jlong h) { if (auto* p=reinterpret_cast<Player*>(h)) p->pause(); }
 extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nResume(JNIEnv*, jobject, jlong h) { if (auto* p=reinterpret_cast<Player*>(h)) p->resume(); }
 extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nStop(JNIEnv*, jobject, jlong h) { if (auto* p=reinterpret_cast<Player*>(h)) p->stop(); }
@@ -743,6 +508,7 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_jay_glossy_ui_player_NativePlayer
 extern "C" JNIEXPORT jboolean JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nIsPlaying(JNIEnv*, jobject, jlong h) { auto* p=reinterpret_cast<Player*>(h); return p && p->isPlaying() ? JNI_TRUE : JNI_FALSE; }
 extern "C" JNIEXPORT jboolean JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nHasError(JNIEnv*, jobject, jlong h) { auto* p=reinterpret_cast<Player*>(h); return p && p->hasError() ? JNI_TRUE : JNI_FALSE; }
 extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nSetVolume(JNIEnv*, jobject, jlong h, jfloat v) { if (auto* p=reinterpret_cast<Player*>(h)) p->setVolume(v); }
+
 extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nSetDsp(JNIEnv* env, jobject, jlong h, jboolean enabled, jintArray bandsMb, jboolean bass, jint bassStrength, jboolean virtualizer, jint virtualizerStrength, jboolean spatial, jint spatialStrength, jboolean crossfeed, jint crossfeedStrength, jboolean reverb, jint reverbMix, jboolean clarity, jint clarityStrength, jboolean compressor, jint compressorStrength, jboolean limiter, jint limiterStrength, jboolean gain, jint gainMb, jboolean headroom, jboolean bypass) {
     auto* p=reinterpret_cast<Player*>(h); if (!p) return;
     std::vector<int> bands;
@@ -752,4 +518,5 @@ extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nSe
               clarity==JNI_TRUE, clarityStrength, compressor==JNI_TRUE, compressorStrength, limiter==JNI_TRUE, limiterStrength,
               gain==JNI_TRUE, gainMb, headroom==JNI_TRUE, bypass==JNI_TRUE);
 }
+
 extern "C" JNIEXPORT void JNICALL Java_com_jay_glossy_ui_player_NativePlayer_nRelease(JNIEnv*, jobject, jlong h) { delete reinterpret_cast<Player*>(h); }
