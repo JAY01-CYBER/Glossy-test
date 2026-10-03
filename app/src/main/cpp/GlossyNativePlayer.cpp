@@ -374,7 +374,7 @@ private:
             
             // Handle Seeking
             if (seekRequested_.load(std::memory_order_acquire)) {
-                int64_t targetMs = std::max<int64_t>(0, seekMs_.load(std::order_acquire));
+                int64_t targetMs = std::max<int64_t>(0, seekMs_.load(std::memory_order_acquire));
                 int64_t targetPts = targetMs * AV_TIME_BASE / 1000;
                 
                 av_seek_frame(formatCtx_, -1, targetPts, AVSEEK_FLAG_BACKWARD);
@@ -401,7 +401,7 @@ private:
                             
                             // Resample decoded frame to 48kHz, Float, Stereo
                             int outSamples = swr_get_out_samples(swrCtx_, frame->nb_samples);
-                            if (resampledData.size() < outSamples * 2) {
+                            if (resampledData.size() < static_cast<size_t>(outSamples * 2)) {
                                 resampledData.resize(outSamples * 2);
                             }
 
