@@ -338,9 +338,6 @@ class MusicService :
     private val secondaryPlayerListener =
         object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                // The secondary player is intentionally prepared silently before the actual
-                // crossfade. If it was still buffering when the fade point was reached, start
-                // the fade as soon as it becomes READY instead of swapping to silence.
                 if (playbackState == Player.STATE_READY && !isCrossfading) {
                     if (crossfadeArmed) {
                         tryStartCrossfade()
@@ -481,6 +478,9 @@ class MusicService :
             val currentMediaItem = player.currentMediaItem ?: return
             val mediaId = currentMediaItem.mediaId
 
+            // CRASH FIX: ExoPlayer ki position MAIN THREAD par hi read kar lo
+            val safeCurrentPos = player.currentPosition 
+
             // ExoPlayer ko background mein mute aur pause kar do
             player.pause() 
             nativeAudioProcessor.setRoutingEnabled(false)
@@ -507,11 +507,13 @@ class MusicService :
             // Apne naye FFmpeg C++ Player ko URL bhej do!
             if (url != null && generation == nativeStartGeneration.get()) {
                 withContext(Dispatchers.IO) {
-                    glossyNativePlayer.playUrl(url, player.currentPosition)
+                    // Yahan uper safely li hui position bhejo
+                    glossyNativePlayer.playUrl(url, safeCurrentPos)
                     glossyNativePlayer.syncDsp()
                 }
                 
                 glossyNativeMediaPlayer?.playWhenReady = true
+                glossyNativeMediaPlayer?.invalidateState()
 
                 // AUTO-ADVANCE TRACKER
                 nativePlaybackMonitorJob?.cancel()
