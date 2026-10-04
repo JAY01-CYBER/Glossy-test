@@ -3,12 +3,9 @@ package com.jay.glossy.playback
 import android.os.Looper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
@@ -17,7 +14,6 @@ import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Timeline
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
-import timber.log.Timber
 
 /**
  * Media3 Player facade for the real Glossy native audio path.
@@ -27,16 +23,14 @@ class GlossyNativeMediaPlayer(
     looper: Looper,
     private val scope: CoroutineScope,
 ) : SimpleBasePlayer(looper) {
-    private companion object { const val TAG = "GlossyNativeMediaPlayer" }
 
     @Volatile private var released = false
-    @Volatile private var playWhenReadyState = false
+    @Volatile var playWhenReadyState = false
     @Volatile private var repeatModeState = Player.REPEAT_MODE_OFF
     @Volatile private var shuffleState = false
     @Volatile private var volumeState = 1f
     @Volatile private var playbackParametersState = PlaybackParameters.DEFAULT
     @Volatile private var errorState: PlaybackException? = null
-    @Volatile private var state = Player.STATE_IDLE
 
     private val listener = object : Player.Listener {
         override fun onTimelineChanged(timeline: Timeline, reason: Int) {
@@ -61,18 +55,7 @@ class GlossyNativeMediaPlayer(
 
     init {
         service.player.addListener(listener)
-        // LOCKSCREEN & QS PANEL FIX: Yeh tracker check karega jab FFmpeg actual me play karna shuru karega
-        scope.launch {
-            var lastPlayingState = false
-            while (isActive) {
-                val nativePlaying = service.glossyNativePlayer.isPlaying()
-                if (nativePlaying != lastPlayingState) {
-                    lastPlayingState = nativePlaying
-                    invalidateState() // System (Lockscreen) ko update bhej do
-                }
-                delay(500)
-            }
-        }
+        // Background polling loop has been removed to prevent state flooding and Compose crashes.
     }
 
     private fun exo(): androidx.media3.exoplayer.ExoPlayer = service.player
@@ -95,13 +78,13 @@ class GlossyNativeMediaPlayer(
         }
         val currentIndex = p.currentMediaItemIndex.takeIf { it >= 0 } ?: C.INDEX_UNSET
         val nativePosition = service.glossyNativePlayer.position()
-        val nativePlaying = service.glossyNativePlayer.isPlaying()
         
+        // CRASH FIX: Removed STATE_BUFFERING. By instantly jumping to STATE_READY, 
+        // the Compose LoadingIndicator never renders, preventing the UI EmptyCanvas crash 
+        // and keeping the lockscreen controls snappy.
         val effectiveState = when {
             items.isEmpty() -> Player.STATE_IDLE
             errorState != null -> Player.STATE_IDLE
-            nativePlaying -> Player.STATE_READY
-            playWhenReadyState -> Player.STATE_BUFFERING
             else -> Player.STATE_READY
         }
 
@@ -124,7 +107,7 @@ class GlossyNativeMediaPlayer(
             .setPlayerError(errorState)
             .setRepeatMode(repeatModeState)
             .setShuffleModeEnabled(shuffleState)
-            .setIsLoading(effectiveState == Player.STATE_BUFFERING)
+            .setIsLoading(false) // Never show loading spinner
             .setPlaybackParameters(playbackParametersState)
             .setTrackSelectionParameters(TrackSelectionParameters.DEFAULT)
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build())
@@ -139,7 +122,7 @@ class GlossyNativeMediaPlayer(
 
     override fun handlePrepare(): ListenableFuture<*> {
         errorState = null
-        state = Player.STATE_BUFFERING
+        state = Player.STATE_READY
         if (exo().currentMediaItemIndex >= 0) scope.launch { service.startGlossyNativeForCurrentItem() }
         invalidateState()
         return Futures.immediateVoidFuture()
@@ -198,7 +181,7 @@ class GlossyNativeMediaPlayer(
         val index = if (startIndex == C.INDEX_UNSET) 0 else startIndex.coerceIn(0, (mediaItems.size - 1).coerceAtLeast(0))
         exo().setMediaItems(mediaItems, index, startPositionMs)
         if (mediaItems.isNotEmpty()) {
-            state = Player.STATE_BUFFERING
+            state = Player.STATE_READY
             if (playWhenReadyState) scope.launch { service.startGlossyNativeForCurrentItem() }
         }
         invalidateState()
