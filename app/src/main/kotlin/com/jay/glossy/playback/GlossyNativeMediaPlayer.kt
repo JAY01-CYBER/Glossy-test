@@ -122,7 +122,6 @@ class GlossyNativeMediaPlayer(
 
     override fun handlePrepare(): ListenableFuture<*> {
         errorState = null
-        state = Player.STATE_READY
         if (exo().currentMediaItemIndex >= 0) scope.launch { service.startGlossyNativeForCurrentItem() }
         invalidateState()
         return Futures.immediateVoidFuture()
@@ -181,7 +180,6 @@ class GlossyNativeMediaPlayer(
         val index = if (startIndex == C.INDEX_UNSET) 0 else startIndex.coerceIn(0, (mediaItems.size - 1).coerceAtLeast(0))
         exo().setMediaItems(mediaItems, index, startPositionMs)
         if (mediaItems.isNotEmpty()) {
-            state = Player.STATE_READY
             if (playWhenReadyState) scope.launch { service.startGlossyNativeForCurrentItem() }
         }
         invalidateState()
