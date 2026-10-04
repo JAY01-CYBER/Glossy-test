@@ -513,7 +513,6 @@ class MusicService :
                 }
                 
                 glossyNativeMediaPlayer?.playWhenReady = true
-                glossyNativeMediaPlayer?.invalidateState()
 
                 // AUTO-ADVANCE TRACKER
                 nativePlaybackMonitorJob?.cancel()
