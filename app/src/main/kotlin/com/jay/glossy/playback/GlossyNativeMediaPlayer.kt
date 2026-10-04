@@ -3,6 +3,8 @@ package com.jay.glossy.playback
 import android.os.Looper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -12,7 +14,6 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
 import androidx.media3.common.TrackSelectionParameters
-import androidx.media3.common.Tracks
 import androidx.media3.common.Timeline
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -20,9 +21,6 @@ import timber.log.Timber
 
 /**
  * Media3 Player facade for the real Glossy native audio path.
- *
- * The audible clock, decoding and rendering live in NativePlayer/Oboe. ExoPlayer is only
- * mirrored here for application queue compatibility while native mode is selected.
  */
 class GlossyNativeMediaPlayer(
     private val service: MusicService,
@@ -42,11 +40,7 @@ class GlossyNativeMediaPlayer(
 
     private val listener = object : Player.Listener {
         override fun onTimelineChanged(timeline: Timeline, reason: Int) {
-            // The native engine is independent from ExoPlayer, so clearing the queue must
-            // explicitly tear down the native decoder/Oboe stream as well.
-            if (timeline.isEmpty) {
-                service.glossyNativePlayer.stop()
-            }
+            if (timeline.isEmpty) service.glossyNativePlayer.stop()
             invalidateState()
         }
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -67,6 +61,18 @@ class GlossyNativeMediaPlayer(
 
     init {
         service.player.addListener(listener)
+        // LOCKSCREEN & QS PANEL FIX: Yeh tracker check karega jab FFmpeg actual me play karna shuru karega
+        scope.launch {
+            var lastPlayingState = false
+            while (isActive) {
+                val nativePlaying = service.glossyNativePlayer.isPlaying()
+                if (nativePlaying != lastPlayingState) {
+                    lastPlayingState = nativePlaying
+                    invalidateState() // System (Lockscreen) ko update bhej do
+                }
+                delay(500)
+            }
+        }
     }
 
     private fun exo(): androidx.media3.exoplayer.ExoPlayer = service.player
@@ -89,8 +95,8 @@ class GlossyNativeMediaPlayer(
         }
         val currentIndex = p.currentMediaItemIndex.takeIf { it >= 0 } ?: C.INDEX_UNSET
         val nativePosition = service.glossyNativePlayer.position()
-        val nativeDuration = service.glossyNativePlayer.duration().takeIf { it >= 0 } ?: p.duration
         val nativePlaying = service.glossyNativePlayer.isPlaying()
+        
         val effectiveState = when {
             items.isEmpty() -> Player.STATE_IDLE
             errorState != null -> Player.STATE_IDLE
@@ -101,28 +107,15 @@ class GlossyNativeMediaPlayer(
 
         val commands = Player.Commands.Builder()
             .addAll(
-                Player.COMMAND_PLAY_PAUSE,
-                Player.COMMAND_PREPARE,
-                Player.COMMAND_STOP,
-                Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
-                Player.COMMAND_SEEK_TO_MEDIA_ITEM,
-                Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
-                Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
-                Player.COMMAND_SEEK_BACK,
-                Player.COMMAND_SEEK_FORWARD,
-                Player.COMMAND_GET_CURRENT_MEDIA_ITEM,
-                Player.COMMAND_GET_TIMELINE,
-                Player.COMMAND_GET_METADATA,
-                Player.COMMAND_GET_VOLUME,
-                Player.COMMAND_SET_VOLUME,
-                Player.COMMAND_SET_REPEAT_MODE,
-                Player.COMMAND_SET_SHUFFLE_MODE,
-                Player.COMMAND_SET_SPEED_AND_PITCH,
-                Player.COMMAND_SET_MEDIA_ITEM,
-                Player.COMMAND_CHANGE_MEDIA_ITEMS,
+                Player.COMMAND_PLAY_PAUSE, Player.COMMAND_PREPARE, Player.COMMAND_STOP,
+                Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, Player.COMMAND_SEEK_TO_MEDIA_ITEM,
+                Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+                Player.COMMAND_SEEK_BACK, Player.COMMAND_SEEK_FORWARD, Player.COMMAND_GET_CURRENT_MEDIA_ITEM,
+                Player.COMMAND_GET_TIMELINE, Player.COMMAND_GET_METADATA, Player.COMMAND_GET_VOLUME,
+                Player.COMMAND_SET_VOLUME, Player.COMMAND_SET_REPEAT_MODE, Player.COMMAND_SET_SHUFFLE_MODE,
+                Player.COMMAND_SET_SPEED_AND_PITCH, Player.COMMAND_SET_MEDIA_ITEM, Player.COMMAND_CHANGE_MEDIA_ITEMS,
                 Player.COMMAND_RELEASE,
-            )
-            .build()
+            ).build()
 
         return State.Builder()
             .setAvailableCommands(commands)
@@ -134,12 +127,7 @@ class GlossyNativeMediaPlayer(
             .setIsLoading(effectiveState == Player.STATE_BUFFERING)
             .setPlaybackParameters(playbackParametersState)
             .setTrackSelectionParameters(TrackSelectionParameters.DEFAULT)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                    .build()
-            )
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build())
             .setVolume(volumeState)
             .setPlaylist(items)
             .setCurrentMediaItemIndex(currentIndex)
@@ -152,21 +140,15 @@ class GlossyNativeMediaPlayer(
     override fun handlePrepare(): ListenableFuture<*> {
         errorState = null
         state = Player.STATE_BUFFERING
-        val index = exo().currentMediaItemIndex
-        if (index >= 0) {
-            scope.launch { service.startGlossyNativeForCurrentItem() }
-        }
+        if (exo().currentMediaItemIndex >= 0) scope.launch { service.startGlossyNativeForCurrentItem() }
         invalidateState()
         return Futures.immediateVoidFuture()
     }
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
         playWhenReadyState = playWhenReady
-        if (playWhenReady) {
-            scope.launch { service.startGlossyNativeForCurrentItem() }
-        } else {
-            service.glossyNativePlayer.pause()
-        }
+        if (playWhenReady) scope.launch { service.startGlossyNativeForCurrentItem() }
+        else service.glossyNativePlayer.pause()
         invalidateState()
         return Futures.immediateVoidFuture()
     }
